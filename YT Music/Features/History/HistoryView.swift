@@ -204,7 +204,7 @@ private struct HistoryTrackRow: View {
         .clipShape(.rect(cornerRadius: 6))
         .contentShape(.rect)
         .onHover { hovering = $0 }
-        .onTapGesture(count: 2) { player.play(tracks, startAt: index, album: "") }
+        .onTapGesture { player.play(tracks, startAt: index, album: "") }
         .musicContextMenu(
             title: track.title,
             subtitle: track.subtitle,
