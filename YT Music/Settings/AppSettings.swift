@@ -87,6 +87,14 @@ final class AppSettings {
         didSet { store(nextTrackPreloadSeconds, for: .nextTrackPreloadSeconds) }
     }
 
+    // MARK: Shuffle
+
+    /// Keep shuffle on when a new album/playlist/radio replaces the queue,
+    /// instead of starting the new queue in its natural order.
+    var keepShuffle: Bool {
+        didSet { store(keepShuffle, for: .keepShuffle) }
+    }
+
     // MARK: Equalizer
 
     var equalizerEnabled: Bool {
@@ -158,6 +166,7 @@ final class AppSettings {
         self.crossfadeEnabled = defaults.bool(forKey: Key.crossfadeEnabled.rawValue)
         self.crossfadeSeconds = defaults.object(forKey: Key.crossfadeSeconds.rawValue) as? Double ?? 6
         self.nextTrackPreloadSeconds = defaults.object(forKey: Key.nextTrackPreloadSeconds.rawValue) as? Double ?? 0
+        self.keepShuffle = defaults.bool(forKey: Key.keepShuffle.rawValue)
         self.equalizerEnabled = defaults.bool(forKey: Key.equalizerEnabled.rawValue)
         self.equalizerGains = Self.decodeGains(defaults.data(forKey: Key.equalizerGains.rawValue))
         self.downloadDirectory = Self.resolveBookmark(defaults.data(forKey: Key.downloadDirectory.rawValue))
@@ -216,6 +225,7 @@ final class AppSettings {
         case crossfadeEnabled    = "settings.crossfadeEnabled"
         case crossfadeSeconds    = "settings.crossfadeSeconds"
         case nextTrackPreloadSeconds = "settings.nextTrackPreloadSeconds"
+        case keepShuffle         = "settings.keepShuffle"
         case equalizerEnabled    = "settings.equalizerEnabled"
         case equalizerGains      = "settings.equalizerGains"
         case downloadDirectory   = "settings.downloadDirectory"
