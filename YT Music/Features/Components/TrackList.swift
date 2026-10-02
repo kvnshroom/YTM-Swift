@@ -117,7 +117,7 @@ private struct TrackRow: View {
         .clipShape(.rect(cornerRadius: 6))
         .contentShape(.rect)
         .onHover { hovering = $0 }
-        .onTapGesture(count: 2) { player.play(tracks, startAt: index, album: album) }
+        .onTapGesture { player.play(tracks, startAt: index, album: album) }
         .musicContextMenu(
             title: track.title,
             subtitle: track.subtitle,
