@@ -982,6 +982,42 @@ struct PlayerStateShuffleTests {
         #expect(p.queue.map(\.videoId) == ["x", "y", "z"])
     }
 
+    private func keepShuffleSettings() -> AppSettings {
+        let suite = UserDefaults(suiteName: "test.\(UUID().uuidString)")!
+        let s = AppSettings(defaults: suite)
+        s.keepShuffle = true
+        return s
+    }
+
+    @Test("with keepShuffle a new queue is shuffled too, starting at the chosen track")
+    func newQueueKeepsShuffle() {
+        let p = PlayerState(audio: FakeAudioOutput(), resolver: StubResolver(),
+                            settings: keepShuffleSettings())
+        p.play(tracks(["a", "b", "c"]), startAt: 0)
+        p.toggleShuffle()
+        p.play(tracks(["x", "y", "z"]), startAt: 1)
+        #expect(p.isShuffled)
+        #expect(p.queue.first?.videoId == "y")
+        #expect(Set(p.queue.compactMap(\.videoId)) == ["x", "y", "z"])
+        p.toggleShuffle()
+        #expect(p.queue.map(\.videoId) == ["x", "y", "z"])
+    }
+
+    @Test("with keepShuffle a one-off play keeps shuffle for the next queue")
+    func oneOffKeepsShuffleFlag() {
+        let p = PlayerState(audio: FakeAudioOutput(), resolver: StubResolver(),
+                            settings: keepShuffleSettings())
+        p.play(tracks(["a", "b", "c"]), startAt: 0)
+        p.toggleShuffle()
+        p.play(title: "S", subtitle: "A", thumbnailURL: nil, videoId: "s")
+        #expect(p.isShuffled)
+        p.play(tracks(["x", "y", "z"]), startAt: 0)
+        #expect(p.isShuffled)
+        p.play(title: "S", subtitle: "A", thumbnailURL: nil, videoId: "s")
+        p.toggleShuffle()
+        #expect(!p.isShuffled)
+    }
+
     @Test("shuffle state persists and restores")
     func shufflePersists() {
         let store = InMemoryStore()

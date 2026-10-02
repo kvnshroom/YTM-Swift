@@ -356,7 +356,8 @@ final class PlayerState {
             ? Int.random(in: tracks.indices)
             : videoId.flatMap { id in tracks.firstIndex { $0.videoId == id } } ?? 0
         play(tracks, startAt: start, playlistId: playlistId)
-        if shuffled { toggleShuffle() }
+        // With "keep shuffle" the new queue may already be shuffled.
+        if shuffled, !isShuffled { toggleShuffle() }
     }
 
     /// Queues a playlist/album right after the current track (`next`) or at the
@@ -532,7 +533,15 @@ final class PlayerState {
     /// shuffled (radio/play-next) are preserved at the end on restore. No-op with
     /// an empty queue (one-off plays can't shuffle).
     func toggleShuffle() {
-        guard !queue.isEmpty, queue.indices.contains(currentIndex) else { return }
+        guard !queue.isEmpty, queue.indices.contains(currentIndex) else {
+            // A one-off play can't shuffle, but a kept shuffle can still be
+            // switched off there.
+            if isShuffled {
+                isShuffled = false
+                persist()
+            }
+            return
+        }
         let current = queue[currentIndex]
         if isShuffled {
             var restored = orderBeforeShuffle
@@ -553,10 +562,19 @@ final class PlayerState {
     }
 
     /// Clears shuffle state when a brand-new queue replaces the current one, so a
-    /// fresh album/playlist plays in its natural order.
+    /// fresh album/playlist plays in its natural order. With the "keep shuffle"
+    /// setting, a shuffled player shuffles the new queue instead (and a one-off
+    /// play keeps the flag for the next queue).
     private func resetShuffle() {
+        let keep = isShuffled && settings?.keepShuffle == true
         isShuffled = false
         orderBeforeShuffle = []
+        guard keep else { return }
+        if queue.isEmpty {
+            isShuffled = true
+        } else {
+            toggleShuffle()
+        }
     }
 
     // MARK: - Queue editing

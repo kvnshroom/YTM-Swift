@@ -104,6 +104,13 @@ private struct PlaybackSettingsTab: View {
                     .foregroundStyle(.secondary)
             }
 
+            Section("Shuffle") {
+                Toggle("Keep shuffle on for new queues", isOn: $settings.keepShuffle)
+                Text("When shuffle is on, albums, playlists and radios you start next are shuffled too.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Section("Lyrics") {
                 Picker("Lyrics source", selection: $settings.lyricsProvider) {
                     ForEach(LyricsProvider.allCases) { provider in
