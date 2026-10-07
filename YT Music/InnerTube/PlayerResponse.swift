@@ -13,6 +13,13 @@ struct PlayerResponse: Decodable, Sendable {
     let streamingData: StreamingData?
     let videoDetails: VideoDetails?
     let playbackTracking: PlaybackTracking?
+    var responseContext: ResponseContext? = nil
+
+    /// The visitor id YouTube assigned this session. A signed-out stream's PO
+    /// token is bound to it (see `PoTokenProvider`).
+    nonisolated struct ResponseContext: Decodable, Sendable {
+        let visitorData: String?
+    }
 
     struct PlayabilityStatus: Decodable, Sendable {
         let status: String?     // "OK", "LOGIN_REQUIRED", "UNPLAYABLE", "ERROR"
