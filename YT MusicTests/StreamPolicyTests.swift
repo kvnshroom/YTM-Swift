@@ -159,16 +159,16 @@ struct StreamPolicyTests {
     @Test("A stream older than an hour counts as expired, not as a failing source")
     func oldStreamCountsAsExpired() {
         let now = Date()
-        #expect(StreamSourcePolicy.classify(stream(source: .visionOS, age: 3700, now: now), at: now) == .expired)
-        #expect(StreamSourcePolicy.classify(stream(source: .visionOS, age: 60, now: now), at: now)
+        #expect(StreamSourcePolicy.classify(stream(source: .visionOS, age: 3700, now: now), error: nil, at: now) == .expired)
+        #expect(StreamSourcePolicy.classify(stream(source: .visionOS, age: 60, now: now), error: nil, at: now)
             == .sourceFailed(.visionOS))
         var mintedAccount = stream(source: .account, age: 60, now: now)
         mintedAccount.usedToken = true
-        #expect(StreamSourcePolicy.classify(mintedAccount, at: now) == .sourceFailed(.account))
+        #expect(StreamSourcePolicy.classify(mintedAccount, error: nil, at: now) == .sourceFailed(.account))
 
         var unknown = stream(source: .visionOS, age: 60, now: now)
         unknown.source = nil
-        #expect(StreamSourcePolicy.classify(unknown, at: now) == nil)
+        #expect(StreamSourcePolicy.classify(unknown, error: nil, at: now) == nil)
     }
 
     @Test("Failure memory is per video and expires after 10 minutes")
@@ -199,11 +199,11 @@ struct StreamPolicyTests {
         let now = Date()
         var tokenFree = stream(source: .account, age: 60, now: now)
         tokenFree.usedToken = false
-        #expect(StreamSourcePolicy.classify(tokenFree, at: now) == .tokenFreeRejected)
+        #expect(StreamSourcePolicy.classify(tokenFree, error: nil, at: now) == .tokenFreeRejected)
 
         var minted = stream(source: .account, age: 60, now: now)
         minted.usedToken = true
-        #expect(StreamSourcePolicy.classify(minted, at: now) == .sourceFailed(.account))
+        #expect(StreamSourcePolicy.classify(minted, error: nil, at: now) == .sourceFailed(.account))
     }
 
     @Test("Custom mode uses the enabled sources in the user's order")
@@ -247,5 +247,34 @@ struct StreamPolicyTests {
     func automaticIsDefault() {
         #expect(StreamPreferences().sourceMode == .automatic)
         #expect(StreamPreferences().customSources == StreamSourceEntry.defaults)
+    }
+
+    @Test("A connectivity error, even wrapped by AVFoundation, is not the source's fault")
+    func connectivityErrorsAreNotSourceFailures() {
+        let now = Date()
+        let dropped = NSError(domain: "AVFoundationErrorDomain", code: -11800, userInfo: [
+            NSUnderlyingErrorKey: NSError(domain: NSURLErrorDomain, code: NSURLErrorNetworkConnectionLost),
+        ])
+        #expect(StreamSourcePolicy.classify(stream(source: .visionOS, age: 60, now: now), error: dropped, at: now)
+            == .connectivity)
+        var tokenFree = stream(source: .account, age: 60, now: now)
+        tokenFree.usedToken = false
+        #expect(StreamSourcePolicy.classify(tokenFree, error: URLError(.notConnectedToInternet), at: now)
+            == .connectivity)
+
+        let forbidden = NSError(domain: "AVFoundationErrorDomain", code: -11800, userInfo: [
+            NSUnderlyingErrorKey: NSError(domain: "CoreMediaErrorDomain", code: -12660),
+        ])
+        #expect(StreamSourcePolicy.classify(tokenFree, error: forbidden, at: now) == .tokenFreeRejected)
+        #expect(StreamSourcePolicy.classify(stream(source: .visionOS, age: 60, now: now), error: nil, at: now)
+            == .sourceFailed(.visionOS))
+    }
+
+    @Test("Cancellation is told apart from a failing source")
+    func recognizesCancellation() {
+        #expect(StreamSourcePolicy.isCancellation(CancellationError()))
+        #expect(StreamSourcePolicy.isCancellation(URLError(.cancelled)))
+        #expect(!StreamSourcePolicy.isCancellation(URLError(.timedOut)))
+        #expect(!StreamSourcePolicy.isCancellation(NSError(domain: "CoreMediaErrorDomain", code: -12660)))
     }
 }

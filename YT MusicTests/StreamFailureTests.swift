@@ -28,7 +28,7 @@ struct StreamFailureTests {
         player.play(tracks(["a", "b"]), startAt: 0)
         await eventually { audio.loadCount == 1 }
 
-        audio.onStreamFailed?(42)
+        audio.onStreamFailed?(42, nil)
         await eventually { audio.loadCount == 2 }
 
         #expect(resolver.calls.calls.map(\.videoId) == ["a", "a"])
@@ -45,9 +45,9 @@ struct StreamFailureTests {
         player.play(tracks(["a", "b"]), startAt: 0)
         await eventually { audio.loadCount == 1 }
 
-        audio.onStreamFailed?(42)
+        audio.onStreamFailed?(42, nil)
         await eventually { audio.loadCount == 2 }
-        audio.onStreamFailed?(45)
+        audio.onStreamFailed?(45, nil)
         await eventually { audio.loadCount == 3 }
 
         #expect(resolver.calls.calls.map(\.videoId) == ["a", "a", "b"])
@@ -64,7 +64,7 @@ struct StreamFailureTests {
         player.togglePlayPause()
         #expect(!audio.isPlaying)
 
-        audio.onStreamFailed?(42)
+        audio.onStreamFailed?(42, nil)
         await eventually { false }
         #expect(audio.loadCount == 1)
 
@@ -91,11 +91,49 @@ struct StreamFailureTests {
         audio.onProgress?(5, 200)
         await eventually { reporter.playbackStarts.count == 1 }
 
-        audio.onStreamFailed?(42)
+        audio.onStreamFailed?(42, nil)
         await eventually { audio.loadCount == 2 }
         audio.onProgress?(43, 200)
         await eventually { false }
 
         #expect(reporter.playbackStarts.count == 1)
+    }
+
+    @Test("With repeat-one, a track that keeps failing moves on instead of restarting the dead stream")
+    func repeatOneSkipsAFailingTrack() async {
+        let audio = FakeAudioOutput()
+        let resolver = StubResolver()
+        let player = PlayerState(audio: audio, resolver: resolver)
+        player.play(tracks(["a", "b"]), startAt: 0)
+        await eventually { audio.loadCount == 1 }
+        player.cycleRepeatMode()                  // off → all
+        player.cycleRepeatMode()                  // all → one
+        #expect(player.repeatMode == .one)
+
+        audio.onStreamFailed?(42, nil)
+        await eventually { audio.loadCount == 2 }
+        audio.onStreamFailed?(45, nil)
+        await eventually { audio.loadCount == 3 }
+
+        #expect(audio.restartCount == 0)
+        #expect(resolver.calls.calls.map(\.videoId) == ["a", "a", "b"])
+    }
+
+    @Test("A failure arriving while the next track loads is ignored")
+    func ignoresFailureOfTheOutgoingTrack() async {
+        let audio = FakeAudioOutput()
+        let resolver = StubResolver()
+        let player = PlayerState(audio: audio, resolver: resolver)
+        player.play(tracks(["a", "b"]), startAt: 0)
+        await eventually { audio.loadCount == 1 }
+
+        player.next()                             // b starts loading
+        audio.onStreamFailed?(80, nil)            // a's dying item reports late
+        await eventually { audio.loadCount == 2 }
+        await eventually { false }
+
+        #expect(resolver.calls.calls.map(\.videoId) == ["a", "b"])
+        #expect(audio.seekedTo == nil)
+        #expect(player.currentIndex == 1)
     }
 }

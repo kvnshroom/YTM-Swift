@@ -49,7 +49,7 @@ nonisolated struct StubResolver: StreamResolving {
                               watchtimeURL: watchtimeURL, cpn: cpn, loudnessDb: loudnessDb)
     }
 
-    func streamFailed(_ stream: ResolvedStream) async {
+    func streamFailed(_ stream: ResolvedStream, error: Error?) async {
         calls.recordFailure(stream.url)
     }
 }
@@ -110,7 +110,7 @@ final class FakeAudioOutput: AudioOutput {
     var volume: Double = 1
     var normalizesVolume = false
     var onTrackFinished: (() -> Void)?
-    var onStreamFailed: ((Double) -> Void)?
+    var onStreamFailed: ((Double, Error?) -> Void)?
     var onNext: (() -> Void)?
     var onPrevious: (() -> Void)?
     var onProgress: ((Double, Double) -> Void)?

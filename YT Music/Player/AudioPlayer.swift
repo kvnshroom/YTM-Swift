@@ -85,7 +85,7 @@ final class AudioPlayer: AudioOutput {
 
     // Events handled by the owner (PlayerState); see AudioOutput.
     @ObservationIgnored var onTrackFinished: (() -> Void)?
-    @ObservationIgnored var onStreamFailed: ((Double) -> Void)?
+    @ObservationIgnored var onStreamFailed: ((Double, Error?) -> Void)?
     @ObservationIgnored var onNext: (() -> Void)?
     @ObservationIgnored var onPrevious: (() -> Void)?
     @ObservationIgnored var onTogglePlayPause: (() -> Void)?
@@ -532,7 +532,7 @@ final class AudioPlayer: AudioOutput {
         }
         // The item is dead: its end must not advance the queue as well.
         hasSignalledEnd = true
-        onStreamFailed(position)
+        onStreamFailed(position, error)
     }
 
     /// Fires `onTrackFinished` exactly once per item.

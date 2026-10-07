@@ -200,7 +200,7 @@ final class PlayerState {
         self.settings = settings
 
         self.audio.onTrackFinished = { [weak self] in self?.handleTrackFinished() }
-        self.audio.onStreamFailed = { [weak self] position in self?.handleStreamFailure(at: position) }
+        self.audio.onStreamFailed = { [weak self] position, error in self?.handleStreamFailure(at: position, error: error) }
         self.audio.onNext = { [weak self] in self?.next() }
         self.audio.onPrevious = { [weak self] in self?.previous() }
         self.audio.onTogglePlayPause = { [weak self] in self?.togglePlayPause() }
@@ -706,31 +706,34 @@ final class PlayerState {
     /// during a long pause) at the position reached, after telling the resolver
     /// which stream failed. If it dies again without getting further, it is
     /// skipped as before.
-    private func handleStreamFailure(at position: Double) {
-        if crossfadeLoading { return }
-        guard let videoId = nowPlaying?.videoId else { return }
-        let failed = currentStream
+    private func handleStreamFailure(at position: Double, error: Error?) {
+        // Only the stream of the track on screen counts: while another track
+        // loads, the engine may still hold the outgoing one, dying late.
+        guard !crossfadeLoading, !isLoading, let failed = currentStream,
+              let videoId = nowPlaying?.videoId, failed.videoId == nil || failed.videoId == videoId else { return }
         currentStream = nil
         if let last = lastStreamFailure, last.videoId == videoId,
            position < last.position + Self.streamFailureProgress {
-            if let failed { Task { await resolver.streamFailed(failed) } }
-            handleTrackFinished()
+            Task { await resolver.streamFailed(failed, error: error) }
+            // Give up on this track. Not via handleTrackFinished: repeat-one
+            // would restart the dead item, and it wasn't listened to the end.
+            next()
             return
         }
         lastStreamFailure = (videoId, position)
         // Loading starts playback, so a track that died while paused waits
         // for the next play instead of starting on its own.
         if audio.isPlaying {
-            reloadCurrentStream(at: position, after: failed)
+            reloadCurrentStream(at: position, after: (failed, error))
         } else {
-            if let failed { Task { await resolver.streamFailed(failed) } }
+            Task { await resolver.streamFailed(failed, error: error) }
             reloadOnResume = position
         }
     }
 
     /// Reloads the current track at `position`. A failed stream is reported
     /// first, so the resolver can avoid its cause on this very resolve.
-    private func reloadCurrentStream(at position: Double, after failed: ResolvedStream? = nil) {
+    private func reloadCurrentStream(at position: Double, after failed: (stream: ResolvedStream, error: Error?)? = nil) {
         guard let videoId = nowPlaying?.videoId else { return }
         if preparedVideoId == videoId {
             preparedVideoId = nil
@@ -739,7 +742,7 @@ final class PlayerState {
         isLoading = true
         loadTask?.cancel()
         loadTask = Task {
-            if let failed { await resolver.streamFailed(failed) }
+            if let failed { await resolver.streamFailed(failed.stream, error: failed.error) }
             await loadStream(videoId: videoId, startAt: position, keepingHistory: true)
         }
     }

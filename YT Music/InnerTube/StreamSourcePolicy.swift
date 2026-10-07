@@ -107,6 +107,8 @@ nonisolated struct StreamSession: Sendable {
 nonisolated enum StreamFailure: Equatable, Sendable {
     /// The URL outlived googlevideo's expiry (e.g. a long pause): the source is fine.
     case expired
+    /// The connection dropped (Wi-Fi change, sleep): the source is fine too.
+    case connectivity
     /// The source served a stream that broke off.
     case sourceFailed(StreamSource)
     /// A token-free account stream broke off: the Premium exemption no longer
@@ -114,14 +116,16 @@ nonisolated enum StreamFailure: Equatable, Sendable {
     case tokenFreeRejected
 }
 
-extension StreamSourcePolicy {
+nonisolated extension StreamSourcePolicy {
     /// A stream older than this has most likely just expired.
     static let expiryAge: TimeInterval = 3600
 
-    /// Classifies a stream that died mid-track; nil when its source is unknown.
-    static func classify(_ stream: ResolvedStream, at now: Date) -> StreamFailure? {
+    /// Classifies a stream that died mid-track with `error` (AVPlayer's, which
+    /// wraps the cause); nil when its source is unknown.
+    static func classify(_ stream: ResolvedStream, error: Error?, at now: Date) -> StreamFailure? {
         guard let source = stream.source else { return nil }
         if now.timeIntervalSince(stream.resolvedAt) > expiryAge { return .expired }
+        if isConnectivity(error) { return .connectivity }
         if source == .account && !stream.usedToken { return .tokenFreeRejected }
         return .sourceFailed(source)
     }
@@ -137,7 +141,7 @@ nonisolated enum AccountTokenPlan: Equatable, Sendable {
     case mint
 }
 
-extension StreamSourcePolicy {
+nonisolated extension StreamSourcePolicy {
     static func accountTokenPlan(premiumAudio: Bool, tokenFreeRejected: Bool, tokenFreeWorks: Bool?) -> AccountTokenPlan {
         guard premiumAudio, !tokenFreeRejected else { return .mint }
         switch tokenFreeWorks {
@@ -145,6 +149,32 @@ extension StreamSourcePolicy {
         case false?: return .mint
         case nil:    return .probeThenDecide
         }
+    }
+}
+
+nonisolated extension StreamSourcePolicy {
+    /// Network errors that say nothing about the source (checked through
+    /// AVFoundation's chain of underlying errors).
+    private static let connectivityCodes: Set<Int> = [
+        NSURLErrorNotConnectedToInternet, NSURLErrorNetworkConnectionLost, NSURLErrorTimedOut,
+        NSURLErrorCannotConnectToHost, NSURLErrorCannotFindHost, NSURLErrorDNSLookupFailed,
+        NSURLErrorInternationalRoamingOff, NSURLErrorDataNotAllowed,
+    ]
+
+    static func isConnectivity(_ error: Error?) -> Bool {
+        var current = error.map { $0 as NSError }
+        while let nsError = current {
+            if nsError.domain == NSURLErrorDomain && connectivityCodes.contains(nsError.code) { return true }
+            current = nsError.userInfo[NSUnderlyingErrorKey] as? NSError
+        }
+        return false
+    }
+
+    /// Whether `error` just means the resolve was cancelled (the user moved on).
+    static func isCancellation(_ error: Error) -> Bool {
+        if error is CancellationError { return true }
+        let nsError = error as NSError
+        return nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled
     }
 }
 

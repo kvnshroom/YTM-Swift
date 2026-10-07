@@ -57,13 +57,13 @@ protocol StreamResolving: Sendable {
     /// when known — sent with the player request so the listen is attributed
     /// to that playlist/radio.
     func audioStream(videoId: String, playlistId: String?, preferences: StreamPreferences) async throws -> ResolvedStream
-    /// Tells the resolver a stream it returned died mid-track, before the
-    /// player reloads it, so the next resolve can avoid the cause.
-    func streamFailed(_ stream: ResolvedStream) async
+    /// Tells the resolver a stream it returned died mid-track (with AVPlayer's
+    /// error), before the player reloads it, so the next resolve can avoid the cause.
+    func streamFailed(_ stream: ResolvedStream, error: Error?) async
 }
 
 extension StreamResolving {
-    func streamFailed(_ stream: ResolvedStream) async {}
+    func streamFailed(_ stream: ResolvedStream, error: Error?) async {}
 
     /// Convenience for callers (and tests) that don't care about preferences.
     func audioStream(videoId: String) async throws -> ResolvedStream {
@@ -93,12 +93,13 @@ actor StreamResolver: StreamResolving {
 
     func audioStream(videoId: String, playlistId: String?, preferences: StreamPreferences) async throws -> ResolvedStream {
         PlaybackLog.note("resolving videoId=\(videoId) playlist=\(playlistId ?? "—")")
-        let signatureTimestamp = try await decipher.signatureTimestamp()
         // The account's player response is needed whichever source streams: its
         // stats URLs record the play in the user's history, it tells whether the
-        // account offers Premium audio, and it is the account source itself.
+        // account offers Premium audio, and it is the account source itself. Only
+        // it needs the player JS (signature timestamp); visionOS doesn't.
         let accountResponse = Task {
-            try await playerResponse(
+            let signatureTimestamp = try await decipher.signatureTimestamp()
+            return try await playerResponse(
                 videoId: videoId,
                 signatureTimestamp: signatureTimestamp,
                 playlistId: playlistId
@@ -121,6 +122,7 @@ actor StreamResolver: StreamResolving {
 
         var lastError: Error = StreamError.noCompatibleAudio
         for source in order {
+            try Task.checkCancellation()
             do {
                 switch source {
                 case .visionOS:
@@ -132,6 +134,8 @@ actor StreamResolver: StreamResolving {
                     return try await accountStream(videoId: videoId, response: response, preferences: preferences)
                 }
             } catch {
+                // The user moved on: don't fall through to (and mint for) the next source.
+                if Task.isCancelled || StreamSourcePolicy.isCancellation(error) { throw error }
                 PlaybackLog.problem("stream source \(source.rawValue) failed: \(error.localizedDescription)")
                 lastError = error
             }
@@ -144,12 +148,14 @@ actor StreamResolver: StreamResolving {
         throw lastError
     }
 
-    func streamFailed(_ stream: ResolvedStream) async {
+    func streamFailed(_ stream: ResolvedStream, error: Error?) async {
         guard let videoId = stream.videoId,
-              let failure = StreamSourcePolicy.classify(stream, at: Date()) else { return }
+              let failure = StreamSourcePolicy.classify(stream, error: error, at: Date()) else { return }
         switch failure {
         case .expired:
             PlaybackLog.note("stream for \(videoId) expired; re-resolving with the same order")
+        case .connectivity:
+            PlaybackLog.note("stream for \(videoId) lost its connection; re-resolving with the same order")
         case .sourceFailed(let source):
             session.failures.record(source, videoId: videoId, at: Date())
             PlaybackLog.problem("stream source \(source.rawValue) broke off for \(videoId); skipping it for 10 min")
