@@ -842,6 +842,21 @@ final class PlayerState {
     /// client, rather than at load time. No-op (logs) if the player response
     /// carried no stats URL.
     private func armHistory(_ resolved: ResolvedStream) {
+        // Stats URLs still on their way: arm once they arrive, unless another
+        // track is playing by then.
+        if let late = resolved.lateTracking {
+            let videoId = nowPlaying?.videoId
+            Task { [weak self] in
+                let tracking = await late.value
+                guard let self, self.nowPlaying?.videoId == videoId else { return }
+                var stream = resolved
+                stream.lateTracking = nil
+                stream.historyURL = tracking?.playbackURL
+                stream.watchtimeURL = tracking?.watchtimeURL
+                self.armHistory(stream)
+            }
+            return
+        }
         guard resolved.historyURL != nil || resolved.watchtimeURL != nil, resolved.cpn != nil else {
             return
         }
