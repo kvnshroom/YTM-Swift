@@ -132,6 +132,38 @@ nonisolated enum PlaylistPrivacy: String, Sendable, CaseIterable {
     }
 }
 
+/// The bits of a YT Music page's ytcfg that decide a stream PO token's binding.
+nonisolated struct PlayerPageConfig: Sendable, Equatable {
+    /// The signed-in account's id (`DATASYNC_ID`); nil when signed out.
+    var dataSyncId: String?
+    /// YouTube's `html5_generate_content_po_token` experiment: when on, stream
+    /// tokens are bound to the video id instead of the session.
+    var bindsToVideoId: Bool
+
+    init(dataSyncId: String?, bindsToVideoId: Bool) {
+        self.dataSyncId = dataSyncId
+        self.bindsToVideoId = bindsToVideoId
+    }
+
+    /// Parses the page HTML. The experiment flags sit in a JSON string, so `=`
+    /// may appear escaped as `\u003d`.
+    init(page html: String) {
+        dataSyncId = Self.firstMatch(#""DATASYNC_ID"\s*:\s*"([^"]+)""#, in: html)
+        bindsToVideoId = Self.firstMatch(
+            #"html5_generate_content_po_token(?:=|\\u003d)(true|false)"#, in: html
+        ) == "true"
+    }
+
+    private static func firstMatch(_ pattern: String, in text: String) -> String? {
+        guard let regex = try? NSRegularExpression(pattern: pattern),
+              let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+              let range = Range(match.range(at: 1), in: text) else {
+            return nil
+        }
+        return String(text[range])
+    }
+}
+
 /// The signed-in user's rating of a track, mirroring YT Music's like/dislike UI.
 nonisolated enum LikeStatus: String, Codable, Sendable {
     case indifferent
@@ -478,6 +510,19 @@ nonisolated final class InnerTubeClient: Sendable, WatchHistoryReporting {
     func accountInfo() async throws -> AccountInfo? {
         let response: AccountMenuResponse = try await post("account/account_menu", body: [:])
         return AccountInfoParser.parse(response)
+    }
+
+    /// Reads what decides a stream PO token's binding from the ytcfg of the
+    /// music.youtube.com page (InnerTube responses carry neither), fetched with
+    /// the session cookies when signed in.
+    func playerPageConfig() async throws -> PlayerPageConfig {
+        var request = URLRequest(url: URL(string: "https://music.youtube.com/")!)
+        if let cookie = await CredentialStore.shared.requestHeaders()["Cookie"] {
+            request.setValue(cookie, forHTTPHeaderField: "Cookie")
+        }
+        request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
+        let (data, _) = try await session.data(for: request)
+        return PlayerPageConfig(page: String(bytes: data, encoding: .utf8) ?? "")
     }
 
     /// Loads playback streams for a video. The `signatureTimestamp` (extracted
