@@ -147,4 +147,40 @@ struct StreamPolicyTests {
         let failing = Task<Int, Error> { throw URLError(.notConnectedToInternet) }
         #expect(await awaitValue(of: failing, within: 0.5) == nil)
     }
+
+    private func stream(source: StreamSource, age: TimeInterval, now: Date) -> ResolvedStream {
+        var stream = ResolvedStream(url: URL(string: "https://rr1.googlevideo.com/videoplayback")!, duration: 200)
+        stream.videoId = "a"
+        stream.source = source
+        stream.resolvedAt = now.addingTimeInterval(-age)
+        return stream
+    }
+
+    @Test("A stream older than an hour counts as expired, not as a failing source")
+    func oldStreamCountsAsExpired() {
+        let now = Date()
+        #expect(StreamSourcePolicy.classify(stream(source: .visionOS, age: 3700, now: now), at: now) == .expired)
+        #expect(StreamSourcePolicy.classify(stream(source: .visionOS, age: 60, now: now), at: now)
+            == .sourceFailed(.visionOS))
+        #expect(StreamSourcePolicy.classify(stream(source: .account, age: 60, now: now), at: now)
+            == .sourceFailed(.account))
+
+        var unknown = stream(source: .visionOS, age: 60, now: now)
+        unknown.source = nil
+        #expect(StreamSourcePolicy.classify(unknown, at: now) == nil)
+    }
+
+    @Test("Failure memory is per video and expires after 10 minutes")
+    func failureMemoryIsPerVideoAndExpires() {
+        let now = Date()
+        var memory = StreamFailureMemory()
+        memory.record(.visionOS, videoId: "a", at: now)
+
+        #expect(memory.excluded(for: "a", at: now.addingTimeInterval(60)) == [.visionOS])
+        #expect(memory.excluded(for: "b", at: now.addingTimeInterval(60)).isEmpty)
+        #expect(memory.excluded(for: "a", at: now.addingTimeInterval(601)).isEmpty)
+
+        memory.record(.account, videoId: "a", at: now.addingTimeInterval(30))
+        #expect(memory.excluded(for: "a", at: now.addingTimeInterval(60)) == [.visionOS, .account])
+    }
 }

@@ -68,6 +68,8 @@ nonisolated struct StreamSession: Sendable {
     /// one was seen. Re-read on every response, so an expired or new
     /// subscription takes effect from the next track on.
     private(set) var premiumAudio: Bool?
+    /// Sources to skip for a video after its stream broke off.
+    var failures = StreamFailureMemory()
 
     /// Starts over when the signed-in account changed.
     mutating func reset(for sapisid: String?) {
@@ -78,6 +80,42 @@ nonisolated struct StreamSession: Sendable {
 
     mutating func record(_ response: PlayerResponse) {
         premiumAudio = StreamSourcePolicy.offersPremiumAudio(response)
+    }
+}
+
+/// Why a stream died mid-track.
+nonisolated enum StreamFailure: Equatable, Sendable {
+    /// The URL outlived googlevideo's expiry (e.g. a long pause): the source is fine.
+    case expired
+    /// The source served a stream that broke off.
+    case sourceFailed(StreamSource)
+}
+
+extension StreamSourcePolicy {
+    /// A stream older than this has most likely just expired.
+    static let expiryAge: TimeInterval = 3600
+
+    /// Classifies a stream that died mid-track; nil when its source is unknown.
+    static func classify(_ stream: ResolvedStream, at now: Date) -> StreamFailure? {
+        guard let source = stream.source else { return nil }
+        if now.timeIntervalSince(stream.resolvedAt) > expiryAge { return .expired }
+        return .sourceFailed(source)
+    }
+}
+
+/// Sources that broke off for a video recently, skipped for that video for a
+/// while (like Metrolist's `streamClientFailures`). Nothing outlives the session.
+nonisolated struct StreamFailureMemory: Sendable {
+    static let lifetime: TimeInterval = 600
+
+    private var entries: [String: [StreamSource: Date]] = [:]
+
+    mutating func record(_ source: StreamSource, videoId: String, at now: Date) {
+        entries[videoId, default: [:]][source] = now
+    }
+
+    func excluded(for videoId: String, at now: Date) -> Set<StreamSource> {
+        Set((entries[videoId] ?? [:]).filter { now.timeIntervalSince($0.value) < Self.lifetime }.keys)
     }
 }
 

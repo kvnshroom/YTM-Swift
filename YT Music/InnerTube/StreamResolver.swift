@@ -106,7 +106,11 @@ actor StreamResolver: StreamResolving {
         }
 
         let premiumAudio = await premiumAudio(awaiting: accountResponse)
-        let order = StreamSourcePolicy.automaticOrder(quality: preferences.audioQuality, premiumAudio: premiumAudio)
+        let excluded = session.failures.excluded(for: videoId, at: Date())
+        let preferred = StreamSourcePolicy.automaticOrder(quality: preferences.audioQuality, premiumAudio: premiumAudio)
+        // Never skip everything: with every source excluded, try them all again.
+        let remaining = preferred.filter { !excluded.contains($0) }
+        let order = remaining.isEmpty ? preferred : remaining
         PlaybackLog.note("source order: \(order.map(\.rawValue).joined(separator: ", ")) "
             + "(premium audio \(premiumAudio), quality \(preferences.audioQuality.rawValue))")
 
@@ -128,6 +132,18 @@ actor StreamResolver: StreamResolving {
             }
         }
         throw lastError
+    }
+
+    func streamFailed(_ stream: ResolvedStream) async {
+        guard let videoId = stream.videoId,
+              let failure = StreamSourcePolicy.classify(stream, at: Date()) else { return }
+        switch failure {
+        case .expired:
+            PlaybackLog.note("stream for \(videoId) expired; re-resolving with the same order")
+        case .sourceFailed(let source):
+            session.failures.record(source, videoId: videoId, at: Date())
+            PlaybackLog.problem("stream source \(source.rawValue) broke off for \(videoId); skipping it for 10 min")
+        }
     }
 
     /// Whether the signed-in account offers Premium audio. Known after the
