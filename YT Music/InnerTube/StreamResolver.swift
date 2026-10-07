@@ -60,10 +60,13 @@ protocol StreamResolving: Sendable {
     /// Tells the resolver a stream it returned died mid-track (with AVPlayer's
     /// error), before the player reloads it, so the next resolve can avoid the cause.
     func streamFailed(_ stream: ResolvedStream, error: Error?) async
+    /// Loads what resolving needs ahead of the first track (at launch).
+    func prewarm() async
 }
 
 extension StreamResolving {
     func streamFailed(_ stream: ResolvedStream, error: Error?) async {}
+    func prewarm() async {}
 
     /// Convenience for callers (and tests) that don't care about preferences.
     func audioStream(videoId: String) async throws -> ResolvedStream {
@@ -146,6 +149,12 @@ actor StreamResolver: StreamResolving {
             )
         }
         throw lastError
+    }
+
+    /// Fetches the player JS and builds the signature solver, so the first
+    /// track's account response (and Premium detection) doesn't wait for it.
+    func prewarm() async {
+        _ = try? await decipher.signatureTimestamp()
     }
 
     func streamFailed(_ stream: ResolvedStream, error: Error?) async {

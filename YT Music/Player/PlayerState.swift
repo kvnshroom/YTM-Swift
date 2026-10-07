@@ -201,6 +201,8 @@ final class PlayerState {
 
         self.audio.onTrackFinished = { [weak self] in self?.handleTrackFinished() }
         self.audio.onStreamFailed = { [weak self] position, error in self?.handleStreamFailure(at: position, error: error) }
+        // Load the player JS now rather than on the first track.
+        Task { [resolver = self.resolver] in await resolver.prewarm() }
         self.audio.onNext = { [weak self] in self?.next() }
         self.audio.onPrevious = { [weak self] in self?.previous() }
         self.audio.onTogglePlayPause = { [weak self] in self?.togglePlayPause() }
