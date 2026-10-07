@@ -502,6 +502,21 @@ nonisolated final class InnerTubeClient: Sendable, WatchHistoryReporting {
         return try await post("player", body: body)
     }
 
+    /// Loads playback streams for a video as the visionOS YouTube app, which
+    /// currently serves complete streams with plain URLs: no signature or `n`
+    /// solving and no PO token (see `StreamResolver`). Always anonymous. Without
+    /// `visitorData` YouTube answers `LOGIN_REQUIRED` and hands out a fresh one
+    /// in `responseContext`.
+    func visionOSPlayer(videoId: String, visitorData: String?) async throws -> PlayerResponse {
+        try await post(
+            "player",
+            body: ["videoId": videoId, "contentCheckOk": true, "racyCheckOk": true],
+            client: visionOS,
+            authenticated: false,
+            visitorData: visitorData
+        )
+    }
+
     /// Fetches a radio's first batch (~50 tracks) seeded from a video (the
     /// "Start radio" action). The queue's first entry is the seed track itself.
     /// The batch comes with a continuation token (verified live against
@@ -866,6 +881,10 @@ nonisolated final class InnerTubeClient: Sendable, WatchHistoryReporting {
         let clientNameHeader: String  // X-YouTube-Client-Name
         let origin: String
         let apiKey: String
+        /// Overrides the default desktop Chrome user agent.
+        var userAgent: String? = nil
+        /// Extra `context.client` fields (device and OS for native app clients).
+        var clientDetails: [String: String] = [:]
     }
 
     private var webRemix: ClientProfile {
@@ -882,6 +901,25 @@ nonisolated final class InnerTubeClient: Sendable, WatchHistoryReporting {
         clientNameHeader: "1",
         origin: "https://www.youtube.com",
         apiKey: "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8"
+    )
+
+    /// The YouTube app for visionOS (Apple Vision Pro). Only used for anonymous
+    /// `player` requests; values follow yt-dlp's `visionos` client.
+    private let visionOS = ClientProfile(
+        baseURL: URL(string: "https://www.youtube.com/youtubei/v1/")!,
+        clientName: "VISIONOS",
+        clientVersion: "1.02",
+        clientNameHeader: "101",
+        origin: "https://www.youtube.com",
+        apiKey: "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8",
+        userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3) AppleWebKit/605.1.15 "
+            + "(KHTML, like Gecko) Version/26.0 Safari/605.1.15",
+        clientDetails: [
+            "deviceMake": "Apple",
+            "deviceModel": "RealityDevice17,1",
+            "osName": "visionOS",
+            "osVersion": "26.5.23O471",
+        ]
     )
 
     /// POSTs to an InnerTube endpoint as `client` (default: YT Music WEB_REMIX),
@@ -971,7 +1009,7 @@ nonisolated final class InnerTubeClient: Sendable, WatchHistoryReporting {
         request.setValue("1", forHTTPHeaderField: "X-Goog-Api-Format-Version")
         request.setValue(profile.clientVersion, forHTTPHeaderField: "X-YouTube-Client-Version")
         request.setValue(profile.clientNameHeader, forHTTPHeaderField: "X-YouTube-Client-Name")
-        request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue(profile.userAgent ?? userAgent, forHTTPHeaderField: "User-Agent")
     }
 
     /// The InnerTube `context.client` block identifying the impersonated client.
@@ -983,6 +1021,7 @@ nonisolated final class InnerTubeClient: Sendable, WatchHistoryReporting {
             "hl": "en",
             "gl": "US",
         ]
+        clientContext.merge(profile.clientDetails) { current, _ in current }
         if let visitorData { clientContext["visitorData"] = visitorData }
         return ["client": clientContext, "user": [:]]
     }
