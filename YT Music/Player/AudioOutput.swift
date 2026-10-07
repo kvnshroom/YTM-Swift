@@ -39,6 +39,10 @@ protocol AudioOutput: AnyObject {
 
     /// Called when the current item plays to its end.
     var onTrackFinished: (() -> Void)? { get set }
+    /// Called with the position reached when the current item's stream dies
+    /// before its end (dropped connection, expired or rejected URL), so the
+    /// owner can reload it there. Without a handler that counts as the end.
+    var onStreamFailed: ((Double) -> Void)? { get set }
     /// Called when the current item actually starts producing audio — the
     /// buffering → playing transition, not the moment the stream is loaded.
     var onPlaybackStart: (() -> Void)? { get set }
@@ -90,4 +94,5 @@ extension AudioOutput {
     var isActuallyPlaying: Bool { isPlaying }
     var onPlaybackStart: (() -> Void)? { get { nil } set {} }
     var onTogglePlayPause: (() -> Void)? { get { nil } set {} }
+    var onStreamFailed: ((Double) -> Void)? { get { nil } set {} }
 }

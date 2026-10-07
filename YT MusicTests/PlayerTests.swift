@@ -102,6 +102,7 @@ final class FakeAudioOutput: AudioOutput {
     var volume: Double = 1
     var normalizesVolume = false
     var onTrackFinished: (() -> Void)?
+    var onStreamFailed: ((Double) -> Void)?
     var onNext: (() -> Void)?
     var onPrevious: (() -> Void)?
     var onProgress: ((Double, Double) -> Void)?
