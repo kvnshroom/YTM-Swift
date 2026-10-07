@@ -44,9 +44,11 @@ Per track, `StreamResolver`:
 1. Starts the WEB_REMIX `player` request at once (history stats URLs, fallback, Premium detection).
 2. Determines Premium state for this session:
    - signed out → not Premium;
-   - otherwise the **latest** account response decides (`offersPremiumAudio`: itag 141 present and
-     AVPlayer-compatible). It is re-evaluated on every account response, so expiry, upgrade and account
-     switches correct themselves from the next track on.
+   - otherwise Premium is a property of the account for the session: once any account response lists
+     itag 141 (`offersPremiumAudio`, AVPlayer-compatible), it holds until the signed-in account changes
+     or the app relaunches. Single tracks without itag 141 (e.g. some music videos) don't flip it back; a
+     rejected token-free stream only switches the account to tokens. (Revised 2026-10-07 after review:
+     "latest response decides" could alternate Premium users between 128 kbps and token mints.)
    - First track of a session (state unknown, mode Automatic, signed in): wait for the account response
      for at most **0.5 s**; if it isn't there in time, decide "not Premium" for this track.
 3. Builds the order:
