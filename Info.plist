@@ -3,8 +3,8 @@
 <plist version="1.0">
 <dict>
 	<key>SUFeedURL</key>
-	<string>https://git.tenshii.moe/Tenshii/YTM-Swift/raw/branch/master/appcast.xml</string>
+	<string>https://github.com/kvnshroom/YTM-Swift/releases/latest/download/appcast.xml</string>
 	<key>SUPublicEDKey</key>
-	<string>995eMtaqzRZ1icvQ5HFO2jayLHE8N7K0n+JRnLk5T68=</string>
+	<string>gbMG9vO8dYx812/kqkzVFUkSa+RIx2gYyGf4X5x7kSs=</string>
 </dict>
 </plist>
