@@ -57,9 +57,14 @@ protocol StreamResolving: Sendable {
     /// when known — sent with the player request so the listen is attributed
     /// to that playlist/radio.
     func audioStream(videoId: String, playlistId: String?, preferences: StreamPreferences) async throws -> ResolvedStream
+    /// Tells the resolver a stream it returned died mid-track, before the
+    /// player reloads it, so the next resolve can avoid the cause.
+    func streamFailed(_ stream: ResolvedStream) async
 }
 
 extension StreamResolving {
+    func streamFailed(_ stream: ResolvedStream) async {}
+
     /// Convenience for callers (and tests) that don't care about preferences.
     func audioStream(videoId: String) async throws -> ResolvedStream {
         try await audioStream(videoId: videoId, playlistId: nil, preferences: StreamPreferences())

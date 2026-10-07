@@ -146,6 +146,18 @@ final class PlayerState {
     /// The restored track's saved position and duration, shown until it's resumed.
     private var restoredPosition: Double = 0
     private var restoredDuration: Double = 0
+    /// The stream the engine is playing, so a mid-track failure can be
+    /// reported to the resolver.
+    private var currentStream: ResolvedStream?
+    /// Where the current track's stream last died, so a reload that fails
+    /// again without progress skips the track instead of looping.
+    private var lastStreamFailure: (videoId: String, position: Double)?
+    /// Set when the current track's stream died while paused: the next play
+    /// reloads it from here.
+    private var reloadOnResume: Double?
+    /// How much further (seconds) a reloaded stream must get before another
+    /// failure is reloaded again rather than skipped.
+    private static let streamFailureProgress: Double = 10
     /// Position at the last progress-driven snapshot, to throttle saves.
     private var lastPersistedPosition: Double = 0
     /// Set once per track when a crossfade into the next track has been kicked
@@ -188,6 +200,7 @@ final class PlayerState {
         self.settings = settings
 
         self.audio.onTrackFinished = { [weak self] in self?.handleTrackFinished() }
+        self.audio.onStreamFailed = { [weak self] position in self?.handleStreamFailure(at: position) }
         self.audio.onNext = { [weak self] in self?.next() }
         self.audio.onPrevious = { [weak self] in self?.previous() }
         self.audio.onTogglePlayPause = { [weak self] in self?.togglePlayPause() }
@@ -475,11 +488,18 @@ final class PlayerState {
             resumeRestored()
             return
         }
+        // The paused track's stream died meanwhile; play reloads it.
+        if let position = reloadOnResume {
+            reloadOnResume = nil
+            reloadCurrentStream(at: position)
+            return
+        }
         audio.togglePlayPause()
         persist()
         emitPlaybackChange()
     }
     func seek(to seconds: Double) {
+        if reloadOnResume != nil { reloadOnResume = max(0, seconds) }
         // Moves where the not-yet-loaded restored track will resume.
         if awaitingResume {
             restoredPosition = restoredDuration > 0 ? min(max(0, seconds), restoredDuration) : max(0, seconds)
@@ -682,6 +702,48 @@ final class PlayerState {
         }
     }
 
+    /// Reloads a track whose stream died mid-way (typically a URL that expired
+    /// during a long pause) at the position reached, after telling the resolver
+    /// which stream failed. If it dies again without getting further, it is
+    /// skipped as before.
+    private func handleStreamFailure(at position: Double) {
+        if crossfadeLoading { return }
+        guard let videoId = nowPlaying?.videoId else { return }
+        let failed = currentStream
+        currentStream = nil
+        if let last = lastStreamFailure, last.videoId == videoId,
+           position < last.position + Self.streamFailureProgress {
+            if let failed { Task { await resolver.streamFailed(failed) } }
+            handleTrackFinished()
+            return
+        }
+        lastStreamFailure = (videoId, position)
+        // Loading starts playback, so a track that died while paused waits
+        // for the next play instead of starting on its own.
+        if audio.isPlaying {
+            reloadCurrentStream(at: position, after: failed)
+        } else {
+            if let failed { Task { await resolver.streamFailed(failed) } }
+            reloadOnResume = position
+        }
+    }
+
+    /// Reloads the current track at `position`. A failed stream is reported
+    /// first, so the resolver can avoid its cause on this very resolve.
+    private func reloadCurrentStream(at position: Double, after failed: ResolvedStream? = nil) {
+        guard let videoId = nowPlaying?.videoId else { return }
+        if preparedVideoId == videoId {
+            preparedVideoId = nil
+            preparedStream = nil
+        }
+        isLoading = true
+        loadTask?.cancel()
+        loadTask = Task {
+            if let failed { await resolver.streamFailed(failed) }
+            await loadStream(videoId: videoId, startAt: position, keepingHistory: true)
+        }
+    }
+
     private func handleTrackFinished() {
         // A crossfade has already advanced the queue and is loading the next
         // track; the just-ended track is the one we faded out of, so ignore its
@@ -759,6 +821,9 @@ final class PlayerState {
                             artists: [EntityLink] = [], albumLink: EntityLink? = nil,
                             startAt position: Double? = nil) {
         awaitingResume = false
+        lastStreamFailure = nil
+        reloadOnResume = nil
+        currentStream = nil
         lastPersistedPosition = 0
         crossfadeArmed = false
         crossfadeLoading = false
@@ -796,7 +861,9 @@ final class PlayerState {
 
     /// Resolves the stream and hands it to the audio engine. Split out from
     /// `startTrack` so tests can await it directly (no Task race).
-    func loadStream(videoId: String, startAt position: Double? = nil) async {
+    /// `keepingHistory` reloads the playing track without reporting it to
+    /// history a second time.
+    func loadStream(videoId: String, startAt position: Double? = nil, keepingHistory: Bool = false) async {
         do {
             let preferences = settings?.streamPreferences ?? StreamPreferences()
             let resolved: ResolvedStream
@@ -828,7 +895,8 @@ final class PlayerState {
             emitPlaybackChange()
             // Don't ping history yet — the real client reports a live position once
             // the listener is actually into the track. Arm it; handleProgress fires.
-            armHistory(resolved)
+            currentStream = resolved
+            if !keepingHistory { armHistory(resolved) }
         } catch {
             if !Task.isCancelled {
                 loadError = error.localizedDescription
@@ -999,6 +1067,7 @@ final class PlayerState {
             }
             crossfadeLoading = false
             emitPlaybackChange()
+            currentStream = resolved
             armHistory(resolved)
         } catch {
             // Couldn't resolve the next track in time — fall back to a plain
