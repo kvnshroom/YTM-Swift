@@ -302,6 +302,18 @@ actor StreamResolver: StreamResolving {
         throw StreamError.notPlayable(reason)
     }
 
+    /// Adds `pot` to a stream URL (no-op for a nil token). `nonisolated` so it
+    /// can be unit-tested without the actor hop.
+    nonisolated static func appendingPoToken(_ token: String?, to url: URL) -> URL {
+        guard let token, var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            return url
+        }
+        var items = (components.queryItems ?? []).filter { $0.name != "pot" }
+        items.append(URLQueryItem(name: "pot", value: token))
+        components.queryItems = items
+        return components.url ?? url
+    }
+
     /// Picks a playable stream honouring the user's preferences:
     /// - "prefer audio over video" keeps us on adaptive audio-only streams and
     ///   only falls back to a muxed (video+audio) MP4 when no audio stream is
