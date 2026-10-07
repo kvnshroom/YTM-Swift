@@ -2,9 +2,10 @@
 //  StreamResolver.swift
 //  YT Music
 //
-//  Turns a videoId into a final, playable audio URL: requests the player
-//  response (with the correct signatureTimestamp), picks an AVPlayer-compatible
-//  audio stream, and deciphers its URL.
+//  Turns a videoId into a final, playable audio URL. Tries the stream sources
+//  in the order StreamSourcePolicy gives (visionOS for free accounts, the
+//  signed-in account for Premium), picks an AVPlayer-compatible audio stream,
+//  and deciphers its URL when needed.
 //
 
 import Foundation
@@ -37,6 +38,16 @@ struct ResolvedStream: Sendable {
     var cpn: String? = nil
     /// Track loudness relative to YouTube's reference level, in dB (positive is louder).
     var loudnessDb: Double? = nil
+    /// The track this stream plays, and where and when it was resolved, so a
+    /// stream that dies mid-track can be reported back (see `StreamResolving`).
+    var videoId: String? = nil
+    var source: StreamSource? = nil
+    /// Whether the URL carries a PO token minted in a web view.
+    var usedToken = false
+    var resolvedAt = Date()
+    /// Stats URLs that arrive after the stream: the account's player response
+    /// when visionOS answered first. Resolves to nil when there are none.
+    var lateTracking: Task<PlayerResponse.PlaybackTracking?, Never>? = nil
 }
 
 /// Resolves a videoId to a playable stream. Abstracted so PlayerState can be
@@ -66,15 +77,115 @@ actor StreamResolver: StreamResolving {
     private let client = InnerTubeClient.shared
     private let decipher = SignatureDecipher.shared
 
+    /// How long the first track of a session waits for the account response
+    /// to learn whether the account offers Premium audio.
+    static let firstTrackDeadline = 0.5
+
+    private var session = StreamSession()
+    /// The visitor id the visionOS client plays under, taken from its first
+    /// `LOGIN_REQUIRED` answer and reused for later tracks.
+    private var visionOSVisitorData: String?
+
     func audioStream(videoId: String, playlistId: String?, preferences: StreamPreferences) async throws -> ResolvedStream {
         PlaybackLog.note("resolving videoId=\(videoId) playlist=\(playlistId ?? "—")")
         let signatureTimestamp = try await decipher.signatureTimestamp()
-        let response = try await playerResponse(
-            videoId: videoId,
-            signatureTimestamp: signatureTimestamp,
-            playlistId: playlistId
-        )
+        // The account's player response is needed whichever source streams: its
+        // stats URLs record the play in the user's history, it tells whether the
+        // account offers Premium audio, and it is the account source itself.
+        let accountResponse = Task {
+            try await playerResponse(
+                videoId: videoId,
+                signatureTimestamp: signatureTimestamp,
+                playlistId: playlistId
+            )
+        }
 
+        let premiumAudio = await premiumAudio(awaiting: accountResponse)
+        let order = StreamSourcePolicy.automaticOrder(quality: preferences.audioQuality, premiumAudio: premiumAudio)
+        PlaybackLog.note("source order: \(order.map(\.rawValue).joined(separator: ", ")) "
+            + "(premium audio \(premiumAudio), quality \(preferences.audioQuality.rawValue))")
+
+        var lastError: Error = StreamError.noCompatibleAudio
+        for source in order {
+            do {
+                switch source {
+                case .visionOS:
+                    return try await visionOSStream(videoId: videoId, preferences: preferences,
+                                                    accountResponse: accountResponse)
+                case .account:
+                    let response = try await accountResponse.value
+                    session.record(response)
+                    return try await accountStream(videoId: videoId, response: response, preferences: preferences)
+                }
+            } catch {
+                PlaybackLog.problem("stream source \(source.rawValue) failed: \(error.localizedDescription)")
+                lastError = error
+            }
+        }
+        throw lastError
+    }
+
+    /// Whether the signed-in account offers Premium audio. Known after the
+    /// first account response of a session; for the first track, waits for it
+    /// up to `firstTrackDeadline` and otherwise assumes no.
+    private func premiumAudio(awaiting accountResponse: Task<PlayerResponse, Error>) async -> Bool {
+        let sapisid = await CredentialStore.shared.credentials?.sapisid
+        session.reset(for: sapisid)
+        guard sapisid != nil else { return false }
+        if let known = session.premiumAudio { return known }
+        guard let response = await awaitValue(of: accountResponse, within: Self.firstTrackDeadline) else {
+            PlaybackLog.note("account response not there in time; assuming no Premium audio for this track")
+            return false
+        }
+        session.record(response)
+        return session.premiumAudio ?? false
+    }
+
+    /// A stream from the visionOS client. Its URLs are complete as served: no
+    /// signature, `n` parameter or PO token. Starts without waiting for the
+    /// account response, whose stats URLs follow as `lateTracking`.
+    private func visionOSStream(
+        videoId: String,
+        preferences: StreamPreferences,
+        accountResponse: Task<PlayerResponse, Error>
+    ) async throws -> ResolvedStream {
+        let sentVisitorData = visionOSVisitorData
+        var response = try await client.visionOSPlayer(videoId: videoId, visitorData: sentVisitorData)
+        if let fresh = StreamSourcePolicy.retryVisitorData(after: response, sentWith: sentVisitorData) {
+            visionOSVisitorData = fresh
+            response = try await client.visionOSPlayer(videoId: videoId, visitorData: fresh)
+        }
+        PlaybackLog.note("visionOS playabilityStatus=\(response.playabilityStatus?.status ?? "nil")")
+        try checkPlayability(response)
+
+        let format = try selectAudioFormat(response, preferences: preferences)
+        guard let url = StreamSourcePolicy.directURL(of: format) else {
+            throw StreamError.notPlayable("visionOS stream URL needs deciphering")
+        }
+        PlaybackLog.note("visionOS selected itag=\(format.itag ?? -1) mime=\(format.mimeType ?? "?")")
+
+        var stream = resolved(url: url, format: format, response: response,
+                              videoId: videoId, source: .visionOS, usedToken: false)
+        let visionOSTracking = response.playbackTracking
+        stream.lateTracking = Task {
+            let account = try? await accountResponse.value
+            if let account { recordAccountResponse(account) }
+            return account?.playbackTracking ?? visionOSTracking
+        }
+        return stream
+    }
+
+    private func recordAccountResponse(_ response: PlayerResponse) {
+        session.record(response)
+    }
+
+    /// A stream from the signed-in WEB_REMIX response, deciphered in
+    /// JavaScriptCore. Plays in full without a PO token for Premium accounts.
+    private func accountStream(
+        videoId: String,
+        response: PlayerResponse,
+        preferences: StreamPreferences
+    ) async throws -> ResolvedStream {
         let status = response.playabilityStatus?.status ?? "nil"
         let adaptiveCount = response.streamingData?.adaptiveFormats?.count ?? 0
         PlaybackLog.note(
@@ -87,20 +198,37 @@ actor StreamResolver: StreamResolving {
         let format = try selectAudioFormat(response, preferences: preferences)
         PlaybackLog.note("selected itag=\(format.itag ?? -1) mime=\(format.mimeType ?? "?") quality=\(preferences.audioQuality.rawValue)")
 
-        // One content-playback nonce tags the media we fetch and the history
-        // ping, so YouTube correlates them and the play counts toward history.
-        let cpn = WatchHistory.generateCPN()
         let deciphered = try await decipher.streamURL(for: format)
-        let url = WatchHistory.appendingCPN(to: deciphered, cpn: cpn)
-        PlaybackLog.note("resolved stream host=\(url.host ?? "?")")
+        var stream = resolved(url: deciphered, format: format, response: response,
+                              videoId: videoId, source: .account, usedToken: false)
+        stream.historyURL = response.playbackTracking?.playbackURL
+        stream.watchtimeURL = response.playbackTracking?.watchtimeURL
+        return stream
+    }
 
-        let historyURL = response.playbackTracking?.videostatsPlaybackUrl?.baseUrl
-            .flatMap { URL(string: $0) }
-        let watchtimeURL = response.playbackTracking?.videostatsWatchtimeUrl?.baseUrl
-            .flatMap { URL(string: $0) }
-        return ResolvedStream(url: url, duration: response.videoDetails?.duration,
-                              historyURL: historyURL, watchtimeURL: watchtimeURL, cpn: cpn,
-                              loudnessDb: format.loudnessDb ?? response.playerConfig?.audioConfig?.loudnessDb)
+    /// Tags `url` with a fresh content-playback nonce and packs the result
+    /// (history URLs are set by the caller). The same nonce goes into the
+    /// history ping, so YouTube correlates the two and the play counts.
+    private func resolved(
+        url: URL,
+        format: PlayerResponse.Format,
+        response: PlayerResponse,
+        videoId: String,
+        source: StreamSource,
+        usedToken: Bool
+    ) -> ResolvedStream {
+        let cpn = WatchHistory.generateCPN()
+        let url = WatchHistory.appendingCPN(to: url, cpn: cpn)
+        PlaybackLog.note("resolved stream host=\(url.host ?? "?") source=\(source.rawValue)")
+        return ResolvedStream(
+            url: url,
+            duration: response.videoDetails?.duration,
+            cpn: cpn,
+            loudnessDb: format.loudnessDb ?? response.playerConfig?.audioConfig?.loudnessDb,
+            videoId: videoId,
+            source: source,
+            usedToken: usedToken
+        )
     }
 
     /// Player requests are safe to repeat. A short retry covers transient
