@@ -26,6 +26,10 @@ nonisolated final class ResolverCalls: @unchecked Sendable {
     }
 
     var calls: [(videoId: String, playlistId: String?)] { lock.withLock { _calls } }
+
+    private var _failures: [URL] = []
+    func recordFailure(_ url: URL) { lock.withLock { _failures.append(url) } }
+    var failures: [URL] { lock.withLock { _failures } }
 }
 
 nonisolated struct StubResolver: StreamResolving {
@@ -43,6 +47,10 @@ nonisolated struct StubResolver: StreamResolving {
         if shouldThrow { throw StubError.boom }
         return ResolvedStream(url: url, duration: duration, historyURL: historyURL,
                               watchtimeURL: watchtimeURL, cpn: cpn, loudnessDb: loudnessDb)
+    }
+
+    func streamFailed(_ stream: ResolvedStream, error: Error?) async {
+        calls.recordFailure(stream.url)
     }
 }
 
@@ -102,6 +110,7 @@ final class FakeAudioOutput: AudioOutput {
     var volume: Double = 1
     var normalizesVolume = false
     var onTrackFinished: (() -> Void)?
+    var onStreamFailed: ((Double, Error?) -> Void)?
     var onNext: (() -> Void)?
     var onPrevious: (() -> Void)?
     var onProgress: ((Double, Double) -> Void)?

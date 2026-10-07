@@ -78,6 +78,77 @@ private struct GeneralSettingsTab: View {
     }
 }
 
+/// The user's stream source order: drag (or use the context menu) to reorder,
+/// toggle to include. The last enabled source can't be turned off.
+private struct CustomStreamSourcesList: View {
+    @Environment(AppSettings.self) private var settings
+
+    var body: some View {
+        @Bindable var settings = settings
+        let sources = settings.customStreamSources
+
+        ForEach($settings.customStreamSources) { $entry in
+            let index = sources.firstIndex(of: entry) ?? 0
+            let isLastEnabled = entry.isEnabled && sources.filter(\.isEnabled).count == 1
+
+            HStack(spacing: 10) {
+                Image(systemName: "line.3.horizontal")
+                    .foregroundStyle(.tertiary)
+                    .accessibilityHidden(true)
+                Toggle(isOn: $entry.isEnabled) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(entry.source.title)
+                        Text(entry.source.summary)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .disabled(isLastEnabled)
+                .help(isLastEnabled ? "At least one source must stay on." : "")
+            }
+            .contextMenu {
+                Button("Move Up", systemImage: "arrow.up") { move(from: index, by: -1) }
+                    .disabled(index == 0)
+                Button("Move Down", systemImage: "arrow.down") { move(from: index, by: 1) }
+                    .disabled(index == sources.count - 1)
+            }
+        }
+        .onMove { offsets, destination in
+            withAnimation { settings.customStreamSources.move(fromOffsets: offsets, toOffset: destination) }
+        }
+    }
+
+    private func move(from index: Int, by delta: Int) {
+        let target = index + delta
+        guard settings.customStreamSources.indices.contains(target) else { return }
+        withAnimation { settings.customStreamSources.swapAt(index, target) }
+    }
+}
+
+/// What the last stream actually came from, so the stream-source choice (and
+/// an automatic switch to Premium audio) is visible.
+private struct StreamStatusRow: View {
+    private let status = StreamStatus.shared
+
+    var body: some View {
+        LabeledContent("Last stream") {
+            Label(summary, systemImage: status.premiumAudioDetected ? "checkmark.seal.fill" : "waveform")
+                .foregroundStyle(status.premiumAudioDetected ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+                .contentTransition(.opacity)
+        }
+        .animation(.default, value: summary)
+    }
+
+    private var summary: String {
+        guard let source = status.lastSource else { return "Nothing played yet" }
+        var parts = [source.title]
+        if let bitrate = status.lastBitrate, bitrate > 0 { parts.append("\(bitrate / 1000) kbps") }
+        if source == .account && status.premiumAudioDetected { parts.append("Premium") }
+        if status.lastUsedToken { parts.append("web token") }
+        return parts.joined(separator: " · ")
+    }
+}
+
 /// Audio quality, crossfade, autoplay, and lyrics-source preferences.
 private struct PlaybackSettingsTab: View {
     @Environment(AppSettings.self) private var settings
@@ -100,6 +171,30 @@ private struct PlaybackSettingsTab: View {
                 Text("Turn down tracks that are louder than YouTube's reference level, as YouTube does.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+
+            Section("Streaming") {
+                Picker("Stream source", selection: $settings.streamSourceMode.animation()) {
+                    ForEach(StreamSourceMode.allCases) { mode in
+                        Text(mode.label).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+
+                switch settings.streamSourceMode {
+                case .automatic:
+                    Text("Picks the best source for each track: visionOS for speed and efficiency, "
+                        + "your account for uploads and Premium quality.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                case .custom:
+                    CustomStreamSourcesList()
+                    Text("Sources are tried from top to bottom. Drag to reorder; turn one off to never use it.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                StreamStatusRow()
             }
 
             Section("Crossfade") {

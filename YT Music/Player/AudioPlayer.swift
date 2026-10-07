@@ -88,6 +88,7 @@ final class AudioPlayer: AudioOutput {
 
     // Events handled by the owner (PlayerState); see AudioOutput.
     @ObservationIgnored var onTrackFinished: (() -> Void)?
+    @ObservationIgnored var onStreamFailed: ((Double, Error?) -> Void)?
     @ObservationIgnored var onNext: (() -> Void)?
     @ObservationIgnored var onPrevious: (() -> Void)?
     @ObservationIgnored var onTogglePlayPause: (() -> Void)?
@@ -520,18 +521,35 @@ final class AudioPlayer: AudioOutput {
                 self?.signalEnd()
             }
         }
-        // A stream that dies mid-way (dropped connection, expired URL) never
-        // reaches its end; move on instead of sitting silent.
+        // A stream that dies mid-way (dropped connection, expired or rejected
+        // URL) never reaches its end; reload or move on instead of sitting silent.
         if let failObserver { NotificationCenter.default.removeObserver(failObserver) }
         failObserver = NotificationCenter.default.addObserver(
             forName: AVPlayerItem.failedToPlayToEndTimeNotification,
             object: item,
             queue: .main
-        ) { [weak self] _ in
+        ) { [weak self] notification in
+            let error = notification.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error
             MainActor.assumeIsolated {
-                self?.signalEnd()
+                self?.streamFailed(error)
             }
         }
+    }
+
+    /// Hands a stream that died before its end to `onStreamFailed` with the
+    /// position reached. Within the last seconds, or without a handler, the
+    /// track just counts as finished.
+    private func streamFailed(_ error: Error?) {
+        guard !hasSignalledEnd else { return }
+        let position = currentTime
+        PlaybackLog.problem("stream failed at \(Int(position))s: \(error?.localizedDescription ?? "unknown error")")
+        guard let onStreamFailed, duration <= 0 || position < duration - 2 else {
+            signalEnd()
+            return
+        }
+        // The item is dead: its end must not advance the queue as well.
+        hasSignalledEnd = true
+        onStreamFailed(position, error)
     }
 
     /// Fires `onTrackFinished` exactly once per item.
