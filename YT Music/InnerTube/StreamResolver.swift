@@ -64,9 +64,18 @@ actor StreamResolver: StreamResolving {
     private let client = InnerTubeClient.shared
     private let decipher = SignatureDecipher.shared
 
+    /// The page config deciding PO token bindings, keyed by the SAPISID it was
+    /// read with (nil = signed out) so a sign-in change re-reads it.
+    private var pageConfig: (sapisid: String?, config: PlayerPageConfig)?
+
     func audioStream(videoId: String, playlistId: String?, preferences: StreamPreferences) async throws -> ResolvedStream {
         PlaybackLog.note("resolving videoId=\(videoId) playlist=\(playlistId ?? "—")")
         let signatureTimestamp = try await decipher.signatureTimestamp()
+        // Mint the stream's PO token alongside the player request when its
+        // binding is known up front (video id / account), so it adds no latency.
+        let config = await currentPageConfig()
+        let earlyBinding = config.bindsToVideoId ? videoId : config.dataSyncId
+        async let earlyToken = streamingPoToken(binding: earlyBinding)
         let response = try await playerResponse(
             videoId: videoId,
             signatureTimestamp: signatureTimestamp,
@@ -89,7 +98,14 @@ actor StreamResolver: StreamResolving {
         // ping, so YouTube correlates them and the play counts toward history.
         let cpn = WatchHistory.generateCPN()
         let deciphered = try await decipher.streamURL(for: format)
-        let url = WatchHistory.appendingCPN(to: deciphered, cpn: cpn)
+        var poToken = await earlyToken
+        if earlyBinding == nil {
+            poToken = await streamingPoToken(binding: response.responseContext?.visitorData)
+            if poToken == nil { PlaybackLog.problem("potoken: no visitorData to bind to") }
+        }
+        let url = Self.appendingPoToken(
+            poToken, to: WatchHistory.appendingCPN(to: deciphered, cpn: cpn)
+        )
         PlaybackLog.note("resolved stream host=\(url.host ?? "?")")
 
         let historyURL = response.playbackTracking?.videostatsPlaybackUrl?.baseUrl
@@ -101,6 +117,49 @@ actor StreamResolver: StreamResolving {
             + "(approxDurationMs=\(format.approxDurationMs ?? "nil"))")
         return ResolvedStream(url: url, duration: duration,
                               historyURL: historyURL, watchtimeURL: watchtimeURL, cpn: cpn)
+    }
+
+    /// The GVS PO token for `binding`, or nil when there is no binding or it
+    /// can't be minted. Playback then still starts, but googlevideo may cut it
+    /// off after the first megabyte.
+    private func streamingPoToken(binding: String?) async -> String? {
+        guard let binding else { return nil }
+        do {
+            return try await PoTokenProvider.shared.token(for: binding)
+        } catch {
+            PlaybackLog.problem("potoken: \(error.localizedDescription)")
+            return nil
+        }
+    }
+
+    /// The YT Music page config, read once per sign-in state. A failed read
+    /// falls back to binding by video id, the binding YouTube currently uses.
+    private func currentPageConfig() async -> PlayerPageConfig {
+        let sapisid = await CredentialStore.shared.credentials?.sapisid
+        if let pageConfig, pageConfig.sapisid == sapisid { return pageConfig.config }
+
+        let config: PlayerPageConfig
+        do {
+            config = try await client.playerPageConfig()
+            PlaybackLog.note("potoken: bind to \(config.bindsToVideoId ? "video id" : config.dataSyncId != nil ? "account" : "visitor")")
+            pageConfig = (sapisid, config)
+        } catch {
+            PlaybackLog.problem("potoken: page config unavailable (\(error.localizedDescription))")
+            config = PlayerPageConfig(dataSyncId: nil, bindsToVideoId: true)
+        }
+        return config
+    }
+
+    /// Adds `pot` to a stream URL (no-op for a nil token). `nonisolated` so it
+    /// can be unit-tested without the actor hop.
+    nonisolated static func appendingPoToken(_ token: String?, to url: URL) -> URL {
+        guard let token, var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            return url
+        }
+        var items = (components.queryItems ?? []).filter { $0.name != "pot" }
+        items.append(URLQueryItem(name: "pot", value: token))
+        components.queryItems = items
+        return components.url ?? url
     }
 
     /// Player requests are safe to repeat. A short retry covers transient
