@@ -136,6 +136,11 @@ actor StreamResolver: StreamResolving {
                 lastError = error
             }
         }
+        if preferences.sourceMode == .custom, preferences.customSources.filter(\.isEnabled).count == 1 {
+            throw StreamError.notPlayable(
+                "\(lastError.localizedDescription) Turn on another source in Settings → Streaming to try it as a fallback."
+            )
+        }
         throw lastError
     }
 
@@ -302,6 +307,12 @@ actor StreamResolver: StreamResolving {
         let cpn = WatchHistory.generateCPN()
         let url = WatchHistory.appendingCPN(to: url, cpn: cpn)
         PlaybackLog.note("resolved stream host=\(url.host ?? "?") source=\(source.rawValue)")
+        let bitrate = format.bitrate
+        let premium = session.premiumAudio ?? false
+        Task { @MainActor in
+            StreamStatus.shared.recordStream(from: source, bitrate: bitrate, usedToken: usedToken)
+            StreamStatus.shared.recordPremiumAudio(premium)
+        }
         return ResolvedStream(
             url: url,
             duration: response.videoDetails?.duration,
