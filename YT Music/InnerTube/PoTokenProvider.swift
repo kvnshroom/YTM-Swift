@@ -19,8 +19,10 @@
 //       id (so one mint per track); otherwise the account's `datasyncId` when
 //       signed in, else `visitorData`.
 //
-//  All four steps run in one short-lived web view per binding (~0.5 s, done
-//  alongside the player request); the token is cached until it expires. Reference implementations: LuanRT/BgUtils (MIT) and NewPipe's
+//  All four steps run in one short-lived web view per binding (~0.5 s); the
+//  token is cached until it expires. Only the account source needs it, and only
+//  when the account isn't Premium (see StreamSourcePolicy). Reference
+//  implementations: LuanRT/BgUtils (MIT) and NewPipe's
 //  `PoTokenWebView`. Like the signature solver this is FRAGILE: if BotGuard or
 //  the jnn endpoints change, compare against those projects and yt-dlp's
 //  PO Token guide. Failures are logged and playback continues without `pot`.

@@ -31,6 +31,59 @@ nonisolated enum AudioQuality: String, Codable, CaseIterable, Sendable, Identifi
     }
 }
 
+/// How the resolver picks where a track's stream comes from (see `StreamSource`).
+nonisolated enum StreamSourceMode: String, Codable, CaseIterable, Sendable, Identifiable {
+    /// visionOS first, the account first when it offers Premium audio.
+    case automatic
+    /// The user's own order of `StreamSourceEntry`s.
+    case custom
+
+    var id: Self { self }
+
+    var label: String {
+        switch self {
+        case .automatic: "Automatic"
+        case .custom:    "Custom"
+        }
+    }
+}
+
+/// One row of the custom stream source order.
+nonisolated struct StreamSourceEntry: Codable, Hashable, Sendable, Identifiable {
+    var source: StreamSource
+    var isEnabled = true
+
+    var id: StreamSource { source }
+
+    static let defaults = StreamSource.allCases.map { StreamSourceEntry(source: $0) }
+
+    /// Repairs a stored order: drops duplicates, appends sources added since
+    /// (enabled), and keeps at least one source enabled.
+    static func normalized(_ entries: [StreamSourceEntry]) -> [StreamSourceEntry] {
+        var seen = Set<StreamSource>()
+        var result = entries.filter { seen.insert($0.source).inserted }
+        result += StreamSource.allCases.filter { !seen.contains($0) }.map { StreamSourceEntry(source: $0) }
+        if !result.contains(where: \.isEnabled) { result[0].isEnabled = true }
+        return result
+    }
+}
+
+extension StreamSource {
+    var title: String {
+        switch self {
+        case .visionOS: "visionOS"
+        case .account:  "YouTube Music account"
+        }
+    }
+
+    var summary: String {
+        switch self {
+        case .visionOS: "No sign-in · up to 128 kbps · no web view"
+        case .account:  "Signed in · up to 256 kbps with Premium · plays uploads"
+        }
+    }
+}
+
 /// The subset of settings the (nonisolated) stream resolver needs. A plain
 /// Sendable value so it can be passed across the actor boundary on each resolve.
 nonisolated struct StreamPreferences: Sendable, Equatable {
@@ -38,6 +91,8 @@ nonisolated struct StreamPreferences: Sendable, Equatable {
     /// When true, music videos are played as audio-only adaptive streams and a
     /// muxed (video+audio) stream is used only as a last resort.
     var preferAudioOverVideo: Bool = true
+    var sourceMode: StreamSourceMode = .automatic
+    var customSources: [StreamSourceEntry] = StreamSourceEntry.defaults
 }
 
 @MainActor
@@ -51,6 +106,35 @@ final class AppSettings {
 
     var preferAudioOverVideo: Bool {
         didSet { store(preferAudioOverVideo, for: .preferAudioOverVideo) }
+    }
+
+    var streamSourceMode: StreamSourceMode {
+        didSet { store(streamSourceMode.rawValue, for: .streamSourceMode) }
+    }
+
+    /// The order and on/off state of the sources in custom mode.
+    var customStreamSources: [StreamSourceEntry] {
+        didSet {
+            let normalized = StreamSourceEntry.normalized(customStreamSources)
+            if normalized != customStreamSources { customStreamSources = normalized; return }
+            store(try? JSONEncoder().encode(customStreamSources), for: .customStreamSources)
+        }
+    }
+
+    /// Turns down tracks louder than YouTube's reference level.
+    var volumeNormalization: Bool {
+        didSet {
+            store(volumeNormalization, for: .volumeNormalization)
+            onVolumeNormalizationChange?(volumeNormalization)
+        }
+    }
+
+    /// Set by PlayerState so toggling normalization applies to the playing track.
+    @ObservationIgnored var onVolumeNormalizationChange: ((Bool) -> Void)?
+
+    /// When the queue runs out, continue with a radio based on the last track.
+    var autoplay: Bool {
+        didSet { store(autoplay, for: .autoplay) }
     }
 
     /// Optional HTTP(S) proxy used by YouTube requests and stream downloads.
@@ -130,6 +214,13 @@ final class AppSettings {
         onEqualizerChange?(equalizerSettings)
     }
 
+    // MARK: Startup
+
+    /// Mirrors the system login item, which the user can also change in System Settings.
+    var openAtLogin: Bool {
+        didSet { LoginItem.setEnabled(openAtLogin) }
+    }
+
     // MARK: Downloader
 
     /// Where the downloader writes files. nil → the user's Downloads folder.
@@ -141,7 +232,9 @@ final class AppSettings {
     /// Snapshot consumed by the resolver on each track load.
     var streamPreferences: StreamPreferences {
         StreamPreferences(audioQuality: audioQuality,
-                          preferAudioOverVideo: preferAudioOverVideo)
+                          preferAudioOverVideo: preferAudioOverVideo,
+                          sourceMode: streamSourceMode,
+                          customSources: customStreamSources)
     }
 
     /// Effective download destination, falling back to ~/Downloads.
@@ -159,6 +252,14 @@ final class AppSettings {
         self.audioQuality = (defaults.string(forKey: Key.audioQuality.rawValue)
             .flatMap(AudioQuality.init)) ?? .auto
         self.preferAudioOverVideo = defaults.object(forKey: Key.preferAudioOverVideo.rawValue) as? Bool ?? true
+        self.streamSourceMode = (defaults.string(forKey: Key.streamSourceMode.rawValue)
+            .flatMap(StreamSourceMode.init)) ?? .automatic
+        self.customStreamSources = StreamSourceEntry.normalized(
+            defaults.data(forKey: Key.customStreamSources.rawValue)
+                .flatMap { try? JSONDecoder().decode([StreamSourceEntry].self, from: $0) } ?? []
+        )
+        self.volumeNormalization = defaults.bool(forKey: Key.volumeNormalization.rawValue)
+        self.autoplay = defaults.object(forKey: Key.autoplay.rawValue) as? Bool ?? true
         self.proxyURL = defaults.string(forKey: Key.proxyURL.rawValue) ?? ""
         self.lyricsProvider = (defaults.string(forKey: Key.lyricsProvider.rawValue)
             .flatMap(LyricsProvider.init)) ?? .youtubeMusic
@@ -170,6 +271,7 @@ final class AppSettings {
         self.equalizerEnabled = defaults.bool(forKey: Key.equalizerEnabled.rawValue)
         self.equalizerGains = Self.decodeGains(defaults.data(forKey: Key.equalizerGains.rawValue))
         self.downloadDirectory = Self.resolveBookmark(defaults.data(forKey: Key.downloadDirectory.rawValue))
+        self.openAtLogin = LoginItem.isEnabled
     }
 
     /// Decodes persisted band gains, falling back to a flat curve if absent or
@@ -219,6 +321,10 @@ final class AppSettings {
     private enum Key: String {
         case audioQuality        = "settings.audioQuality"
         case preferAudioOverVideo = "settings.preferAudioOverVideo"
+        case streamSourceMode    = "settings.streamSourceMode"
+        case customStreamSources = "settings.customStreamSources"
+        case volumeNormalization = "settings.volumeNormalization"
+        case autoplay            = "settings.autoplay"
         case proxyURL            = "settings.proxyURL"
         case lyricsProvider      = "settings.lyricsProvider"
         case volume              = "settings.volume"

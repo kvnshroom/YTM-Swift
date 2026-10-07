@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>SUFeedURL</key>
+	<string>https://git.tenshii.moe/Tenshii/YTM-Swift/raw/branch/master/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>995eMtaqzRZ1icvQ5HFO2jayLHE8N7K0n+JRnLk5T68=</string>
+</dict>
+</plist>

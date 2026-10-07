@@ -22,6 +22,10 @@ final class ImageCache {
     func insert(_ image: NSImage, for url: URL) {
         cache.setObject(image, forKey: url as NSURL)
     }
+
+    func removeAll() {
+        cache.removeAllObjects()
+    }
 }
 
 /// Drop-in `AsyncImage` replacement backed by `ImageCache`.

@@ -3,16 +3,22 @@
 //  YT Music
 //
 //  The native macOS settings window (Settings scene, ⌘,): a toolbar tab bar
-//  with Playback, Equalizer, and Plugins tabs. Plugins render themselves from
-//  the PluginHost, so new plugins appear here automatically without editing
-//  this file.
+//  with General, Playback, Equalizer, Plugins, and Storage tabs. Plugins
+//  render themselves from the PluginHost, so new plugins appear here
+//  automatically without editing this file.
 //
 
+import Sparkle
 import SwiftUI
 
 struct SettingsView: View {
+    let updater: SPUUpdater?
+
     var body: some View {
         TabView {
+            Tab("General", systemImage: "gearshape") {
+                GeneralSettingsTab(updater: updater)
+            }
             Tab("Playback", systemImage: "speaker.wave.2") {
                 PlaybackSettingsTab()
             }
@@ -22,11 +28,128 @@ struct SettingsView: View {
             Tab("Plugins", systemImage: "puzzlepiece.extension") {
                 PluginsSettingsTab()
             }
+            Tab("Storage", systemImage: "internaldrive") {
+                StorageSettingsTab()
+            }
         }
     }
 }
 
-/// Audio quality, crossfade, and lyrics-source preferences.
+/// Login item, network proxy, and automatic update checks.
+private struct GeneralSettingsTab: View {
+    let updater: SPUUpdater?
+    @Environment(AppSettings.self) private var settings
+    @State private var checksForUpdates = false
+
+    var body: some View {
+        @Bindable var settings = settings
+
+        Form {
+            Section("Startup") {
+                Toggle("Open at login", isOn: $settings.openAtLogin)
+            }
+
+            Section("Network") {
+                TextField("HTTP proxy URL", text: $settings.proxyURL)
+                    .textFieldStyle(.roundedBorder)
+                Text(verbatim: "Example: http://localhost:8888. Leave blank to use the system connection. "
+                    + "Relaunch the app after changing it.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.disabled)
+                if !settings.proxyURL.isEmpty && NetworkProxy(string: settings.proxyURL) == nil {
+                    Text("Enter a valid http:// or https:// proxy URL.")
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+            }
+
+            if let updater {
+                Section("Updates") {
+                    Toggle("Check for updates automatically", isOn: $checksForUpdates)
+                        .onChange(of: checksForUpdates) { _, enabled in
+                            updater.automaticallyChecksForUpdates = enabled
+                        }
+                }
+                .onAppear { checksForUpdates = updater.automaticallyChecksForUpdates }
+            }
+        }
+        .formStyle(.grouped)
+    }
+}
+
+/// The user's stream source order: drag (or use the context menu) to reorder,
+/// toggle to include. The last enabled source can't be turned off.
+private struct CustomStreamSourcesList: View {
+    @Environment(AppSettings.self) private var settings
+
+    var body: some View {
+        @Bindable var settings = settings
+        let sources = settings.customStreamSources
+
+        ForEach($settings.customStreamSources) { $entry in
+            let index = sources.firstIndex(of: entry) ?? 0
+            let isLastEnabled = entry.isEnabled && sources.filter(\.isEnabled).count == 1
+
+            HStack(spacing: 10) {
+                Image(systemName: "line.3.horizontal")
+                    .foregroundStyle(.tertiary)
+                    .accessibilityHidden(true)
+                Toggle(isOn: $entry.isEnabled) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(entry.source.title)
+                        Text(entry.source.summary)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .disabled(isLastEnabled)
+                .help(isLastEnabled ? "At least one source must stay on." : "")
+            }
+            .contextMenu {
+                Button("Move Up", systemImage: "arrow.up") { move(from: index, by: -1) }
+                    .disabled(index == 0)
+                Button("Move Down", systemImage: "arrow.down") { move(from: index, by: 1) }
+                    .disabled(index == sources.count - 1)
+            }
+        }
+        .onMove { offsets, destination in
+            withAnimation { settings.customStreamSources.move(fromOffsets: offsets, toOffset: destination) }
+        }
+    }
+
+    private func move(from index: Int, by delta: Int) {
+        let target = index + delta
+        guard settings.customStreamSources.indices.contains(target) else { return }
+        withAnimation { settings.customStreamSources.swapAt(index, target) }
+    }
+}
+
+/// What the last stream actually came from, so the stream-source choice (and
+/// an automatic switch to Premium audio) is visible.
+private struct StreamStatusRow: View {
+    private let status = StreamStatus.shared
+
+    var body: some View {
+        LabeledContent("Last stream") {
+            Label(summary, systemImage: status.premiumAudioDetected ? "checkmark.seal.fill" : "waveform")
+                .foregroundStyle(status.premiumAudioDetected ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+                .contentTransition(.opacity)
+        }
+        .animation(.default, value: summary)
+    }
+
+    private var summary: String {
+        guard let source = status.lastSource else { return "Nothing played yet" }
+        var parts = [source.title]
+        if let bitrate = status.lastBitrate, bitrate > 0 { parts.append("\(bitrate / 1000) kbps") }
+        if source == .account && status.premiumAudioDetected { parts.append("Premium") }
+        if status.lastUsedToken { parts.append("web token") }
+        return parts.joined(separator: " · ")
+    }
+}
+
+/// Audio quality, crossfade, autoplay, and lyrics-source preferences.
 private struct PlaybackSettingsTab: View {
     @Environment(AppSettings.self) private var settings
 
@@ -44,21 +167,34 @@ private struct PlaybackSettingsTab: View {
                 Text("Play music videos as audio-only streams. Turn off to allow combined video+audio streams when they're higher quality.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-            }
-
-            Section("Network") {
-                TextField("HTTP proxy URL", text: $settings.proxyURL)
-                    .textFieldStyle(.roundedBorder)
-                Text(verbatim: "Example: http://localhost:8888. Leave blank to use the system connection. "
-                    + "Relaunch the app after changing it.")
+                Toggle("Normalize volume", isOn: $settings.volumeNormalization)
+                Text("Turn down tracks that are louder than YouTube's reference level, as YouTube does.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                    .textSelection(.disabled)
-                if !settings.proxyURL.isEmpty && NetworkProxy(string: settings.proxyURL) == nil {
-                    Text("Enter a valid http:// or https:// proxy URL.")
-                        .font(.caption)
-                        .foregroundStyle(.red)
+            }
+
+            Section("Streaming") {
+                Picker("Stream source", selection: $settings.streamSourceMode.animation()) {
+                    ForEach(StreamSourceMode.allCases) { mode in
+                        Text(mode.label).tag(mode)
+                    }
                 }
+                .pickerStyle(.segmented)
+
+                switch settings.streamSourceMode {
+                case .automatic:
+                    Text("Picks the best source for each track: visionOS for speed and efficiency, "
+                        + "your account for uploads and Premium quality.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                case .custom:
+                    CustomStreamSourcesList()
+                    Text("Sources are tried from top to bottom. Drag to reorder; turn one off to never use it.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                StreamStatusRow()
             }
 
             Section("Crossfade") {
@@ -78,6 +214,10 @@ private struct PlaybackSettingsTab: View {
             }
 
             Section("Next track") {
+                Toggle("Autoplay", isOn: $settings.autoplay)
+                Text("When the queue ends, keep playing a radio based on the last track.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 Toggle("Preload next track", isOn: Binding(
                     get: { settings.nextTrackPreloadSeconds > 0 },
                     set: { settings.nextTrackPreloadSeconds = $0 ? 5 : 0 }
@@ -209,6 +349,34 @@ private struct PluginsSettingsTab: View {
     }
 }
 
+/// Disk usage of the shared HTTP cache (API responses and artwork) with a
+/// button to clear it along with the in-memory artwork cache.
+private struct StorageSettingsTab: View {
+    @State private var cacheBytes = URLCache.shared.currentDiskUsage
+
+    var body: some View {
+        Form {
+            Section("Cache") {
+                LabeledContent("Cache size") {
+                    Text(Int64(cacheBytes).formatted(.byteCount(style: .file)))
+                        .monospacedDigit()
+                }
+                Button("Clear Cache") {
+                    URLCache.shared.removeAllCachedResponses()
+                    ImageCache.shared.removeAll()
+                    cacheBytes = URLCache.shared.currentDiskUsage
+                }
+                .disabled(cacheBytes == 0)
+                Text("Cached API responses and artwork. They are downloaded again as needed.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+        .onAppear { cacheBytes = URLCache.shared.currentDiskUsage }
+    }
+}
+
 /// One band's vertical gain slider with its frequency label underneath.
 private struct BandSlider: View {
     @Binding var gain: Double
@@ -250,7 +418,7 @@ private struct PluginRow: View {
 }
 
 #Preview {
-    SettingsView()
+    SettingsView(updater: nil)
         .environment(AppSettings())
         .environment(PluginHost(plugins: [DiscordPlugin(), NotificationsPlugin()]))
 }

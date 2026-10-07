@@ -6,6 +6,10 @@
 	objectVersion = 110;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		FADE0000000000000000B003 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = FADE0000000000000000B002 /* Sparkle */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		FADE0000000000000000A011 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -38,6 +42,7 @@
 		FA34921D2FEEB0AA00171075 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			files = (
+				FADE0000000000000000B003 /* Sparkle in Frameworks */,
 			);
 		};
 		FADE0000000000000000A005 /* Frameworks */ = {
@@ -84,6 +89,9 @@
 				FA3492222FEEB0AA00171075 /* YT Music */,
 			);
 			name = "YT Music";
+			packageProductDependencies = (
+				FADE0000000000000000B002 /* Sparkle */,
+			);
 			productName = "YT Music";
 			productReference = FA3492202FEEB0AA00171075 /* YT Music.app */;
 			productType = "com.apple.product-type.application";
@@ -137,6 +145,9 @@
 			);
 			mainGroup = FA3492172FEEB0AA00171075;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				FADE0000000000000000B001 /* XCRemoteSwiftPackageReference "Sparkle" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = FA3492212FEEB0AA00171075 /* Products */;
 			projectDirPath = "";
@@ -333,6 +344,7 @@
 				ENABLE_USER_SELECTED_FILES = readwrite;
 				EXCLUDED_SOURCE_FILE_NAMES = MilkdropShaders.metal;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "YouTube Music";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -370,6 +382,7 @@
 				ENABLE_USER_SELECTED_FILES = readwrite;
 				EXCLUDED_SOURCE_FILE_NAMES = MilkdropShaders.metal;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "YouTube Music";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -470,6 +483,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		FADE0000000000000000B001 /* XCRemoteSwiftPackageReference "Sparkle" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/sparkle-project/Sparkle";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.10.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		FADE0000000000000000B002 /* Sparkle */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = FADE0000000000000000B001 /* XCRemoteSwiftPackageReference "Sparkle" */;
+			productName = Sparkle;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = FA3492182FEEB0AA00171075 /* Project object */;
 	validationLevel = 1;

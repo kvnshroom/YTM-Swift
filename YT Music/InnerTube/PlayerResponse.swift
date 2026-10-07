@@ -13,12 +13,22 @@ struct PlayerResponse: Decodable, Sendable {
     let streamingData: StreamingData?
     let videoDetails: VideoDetails?
     let playbackTracking: PlaybackTracking?
+    let playerConfig: PlayerConfig?
     var responseContext: ResponseContext? = nil
 
-    /// The visitor id YouTube assigned this session. A signed-out stream's PO
-    /// token is bound to it (see `PoTokenProvider`).
+    /// The visitor id YouTube assigned this session. The visionOS client needs
+    /// one to play (see `StreamResolver`).
     nonisolated struct ResponseContext: Decodable, Sendable {
         let visitorData: String?
+    }
+
+    nonisolated struct PlayerConfig: Decodable, Sendable {
+        let audioConfig: AudioConfig?
+
+        nonisolated struct AudioConfig: Decodable, Sendable {
+            let loudnessDb: Double?
+            let perceptualLoudnessDb: Double?
+        }
     }
 
     struct PlayabilityStatus: Decodable, Sendable {
@@ -32,6 +42,9 @@ struct PlayerResponse: Decodable, Sendable {
     nonisolated struct PlaybackTracking: Decodable, Sendable {
         let videostatsPlaybackUrl: TrackingURL?
         let videostatsWatchtimeUrl: TrackingURL?
+
+        var playbackURL: URL? { videostatsPlaybackUrl?.baseUrl.flatMap { URL(string: $0) } }
+        var watchtimeURL: URL? { videostatsWatchtimeUrl?.baseUrl.flatMap { URL(string: $0) } }
 
         nonisolated struct TrackingURL: Decodable, Sendable {
             let baseUrl: String?
@@ -64,6 +77,7 @@ struct PlayerResponse: Decodable, Sendable {
         let signatureCipher: String?
         let cipher: String?         // older key name
         let audioQuality: String?
+        let loudnessDb: Double?
         /// This stream's own length in milliseconds — more precise than
         /// `lengthSeconds`, which is rounded to whole seconds.
         var approxDurationMs: String? = nil
