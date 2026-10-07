@@ -105,9 +105,14 @@ actor StreamResolver: StreamResolving {
             )
         }
 
-        let premiumAudio = await premiumAudio(awaiting: accountResponse)
+        let premiumAudio = await premiumAudio(awaiting: accountResponse, waits: preferences.sourceMode == .automatic)
         let excluded = session.failures.excluded(for: videoId, at: Date())
-        let preferred = StreamSourcePolicy.automaticOrder(quality: preferences.audioQuality, premiumAudio: premiumAudio)
+        let preferred = StreamSourcePolicy.order(
+            mode: preferences.sourceMode,
+            custom: preferences.customSources,
+            quality: preferences.audioQuality,
+            premiumAudio: premiumAudio
+        )
         // Never skip everything: with every source excluded, try them all again.
         let remaining = preferred.filter { !excluded.contains($0) }
         let order = remaining.isEmpty ? preferred : remaining
@@ -150,15 +155,15 @@ actor StreamResolver: StreamResolving {
     }
 
     /// Whether the signed-in account offers Premium audio. Known after the
-    /// first account response of a session; for the first track, waits for it
-    /// up to `firstTrackDeadline` and otherwise assumes no.
-    private func premiumAudio(awaiting accountResponse: Task<PlayerResponse, Error>) async -> Bool {
+    /// first account response of a session; for the first track (Automatic
+    /// mode only), waits for it up to `firstTrackDeadline`, else assumes no.
+    private func premiumAudio(awaiting accountResponse: Task<PlayerResponse, Error>, waits: Bool) async -> Bool {
         let sapisid = await CredentialStore.shared.credentials?.sapisid
         session.reset(for: sapisid)
         guard sapisid != nil else { return false }
         if let known = session.premiumAudio { return known }
-        guard let response = await awaitValue(of: accountResponse, within: Self.firstTrackDeadline) else {
-            PlaybackLog.note("account response not there in time; assuming no Premium audio for this track")
+        guard waits, let response = await awaitValue(of: accountResponse, within: Self.firstTrackDeadline) else {
+            if waits { PlaybackLog.note("account response not there in time; assuming no Premium audio for this track") }
             return false
         }
         session.record(response)

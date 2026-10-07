@@ -205,4 +205,47 @@ struct StreamPolicyTests {
         minted.usedToken = true
         #expect(StreamSourcePolicy.classify(minted, at: now) == .sourceFailed(.account))
     }
+
+    @Test("Custom mode uses the enabled sources in the user's order")
+    func customOrder() {
+        let custom = [StreamSourceEntry(source: .account), StreamSourceEntry(source: .visionOS)]
+        #expect(StreamSourcePolicy.order(mode: .custom, custom: custom, quality: .auto, premiumAudio: false)
+            == [.account, .visionOS])
+
+        let accountOnly = [StreamSourceEntry(source: .visionOS, isEnabled: false), StreamSourceEntry(source: .account)]
+        #expect(StreamSourcePolicy.order(mode: .custom, custom: accountOnly, quality: .auto, premiumAudio: false)
+            == [.account])
+
+        #expect(StreamSourcePolicy.order(mode: .automatic, custom: accountOnly, quality: .auto, premiumAudio: false)
+            == [.visionOS, .account])
+    }
+
+    @Test("Custom mode with nothing enabled falls back to automatic")
+    func customWithNothingEnabled() {
+        let none = StreamSource.allCases.map { StreamSourceEntry(source: $0, isEnabled: false) }
+        #expect(StreamSourcePolicy.order(mode: .custom, custom: none, quality: .auto, premiumAudio: true)
+            == [.account, .visionOS])
+    }
+
+    @Test("A stored order is repaired: no duplicates, new sources added, one always on")
+    func normalizesStoredOrder() {
+        #expect(StreamSourceEntry.normalized([]) == StreamSourceEntry.defaults)
+
+        let duplicated = [StreamSourceEntry(source: .account), StreamSourceEntry(source: .account, isEnabled: false)]
+        #expect(StreamSourceEntry.normalized(duplicated)
+            == [StreamSourceEntry(source: .account), StreamSourceEntry(source: .visionOS)])
+
+        let allOff = [
+            StreamSourceEntry(source: .account, isEnabled: false),
+            StreamSourceEntry(source: .visionOS, isEnabled: false),
+        ]
+        #expect(StreamSourceEntry.normalized(allOff)
+            == [StreamSourceEntry(source: .account), StreamSourceEntry(source: .visionOS, isEnabled: false)])
+    }
+
+    @Test("Automatic is the default")
+    func automaticIsDefault() {
+        #expect(StreamPreferences().sourceMode == .automatic)
+        #expect(StreamPreferences().customSources == StreamSourceEntry.defaults)
+    }
 }

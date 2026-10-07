@@ -35,6 +35,21 @@ nonisolated enum StreamSourcePolicy {
         return premiumAudio && wantsBest ? [.account, .visionOS] : [.visionOS, .account]
     }
 
+    /// The order to try the sources in: the automatic order, or the user's
+    /// enabled sources (falling back to automatic if none is enabled).
+    static func order(
+        mode: StreamSourceMode,
+        custom: [StreamSourceEntry],
+        quality: AudioQuality,
+        premiumAudio: Bool
+    ) -> [StreamSource] {
+        if mode == .custom {
+            let enabled = custom.filter(\.isEnabled).map(\.source)
+            if !enabled.isEmpty { return enabled }
+        }
+        return automaticOrder(quality: quality, premiumAudio: premiumAudio)
+    }
+
     /// Whether a player response lists Premium's 256 kbps AAC (itag 141). YT
     /// Music serves it only to Premium accounts, so it doubles as detection.
     static func offersPremiumAudio(_ response: PlayerResponse) -> Bool {
