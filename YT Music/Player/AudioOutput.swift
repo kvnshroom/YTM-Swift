@@ -17,6 +17,8 @@ struct NowPlayingMetadata: Sendable, Equatable {
     /// Authoritative track length (from the player response). Preferred over
     /// AVPlayer's `duration`, which can over-estimate while buffering.
     var knownDuration: Double? = nil
+    /// Track loudness in dB relative to YouTube's reference, for volume normalization.
+    var loudnessDb: Double? = nil
 }
 
 @MainActor
@@ -32,6 +34,8 @@ protocol AudioOutput: AnyObject {
     var bufferedTime: Double { get }
     /// Output volume, 0...1. Applied as a master gain on top of any crossfade.
     var volume: Double { get set }
+    /// Turns down tracks louder than YouTube's reference level (see `NowPlayingMetadata.loudnessDb`).
+    var normalizesVolume: Bool { get set }
 
     /// Called when the current item plays to its end.
     var onTrackFinished: (() -> Void)? { get set }
@@ -82,6 +86,7 @@ extension AudioOutput {
     }
     func applyEqualizer(_ settings: EqualizerSettings) {}
     var spectrum: SpectrumAnalyzer? { nil }
+    var normalizesVolume: Bool { get { false } set {} }
     var isActuallyPlaying: Bool { isPlaying }
     var onPlaybackStart: (() -> Void)? { get { nil } set {} }
     var onTogglePlayPause: (() -> Void)? { get { nil } set {} }

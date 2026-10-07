@@ -3,16 +3,22 @@
 //  YT Music
 //
 //  The native macOS settings window (Settings scene, ⌘,): a toolbar tab bar
-//  with Playback, Equalizer, and Plugins tabs. Plugins render themselves from
-//  the PluginHost, so new plugins appear here automatically without editing
-//  this file.
+//  with General, Playback, Equalizer, Plugins, and Storage tabs. Plugins
+//  render themselves from the PluginHost, so new plugins appear here
+//  automatically without editing this file.
 //
 
+import Sparkle
 import SwiftUI
 
 struct SettingsView: View {
+    let updater: SPUUpdater?
+
     var body: some View {
         TabView {
+            Tab("General", systemImage: "gearshape") {
+                GeneralSettingsTab(updater: updater)
+            }
             Tab("Playback", systemImage: "speaker.wave.2") {
                 PlaybackSettingsTab()
             }
@@ -22,11 +28,57 @@ struct SettingsView: View {
             Tab("Plugins", systemImage: "puzzlepiece.extension") {
                 PluginsSettingsTab()
             }
+            Tab("Storage", systemImage: "internaldrive") {
+                StorageSettingsTab()
+            }
         }
     }
 }
 
-/// Audio quality, crossfade, and lyrics-source preferences.
+/// Login item, network proxy, and automatic update checks.
+private struct GeneralSettingsTab: View {
+    let updater: SPUUpdater?
+    @Environment(AppSettings.self) private var settings
+    @State private var checksForUpdates = false
+
+    var body: some View {
+        @Bindable var settings = settings
+
+        Form {
+            Section("Startup") {
+                Toggle("Open at login", isOn: $settings.openAtLogin)
+            }
+
+            Section("Network") {
+                TextField("HTTP proxy URL", text: $settings.proxyURL)
+                    .textFieldStyle(.roundedBorder)
+                Text(verbatim: "Example: http://localhost:8888. Leave blank to use the system connection. "
+                    + "Relaunch the app after changing it.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.disabled)
+                if !settings.proxyURL.isEmpty && NetworkProxy(string: settings.proxyURL) == nil {
+                    Text("Enter a valid http:// or https:// proxy URL.")
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+            }
+
+            if let updater {
+                Section("Updates") {
+                    Toggle("Check for updates automatically", isOn: $checksForUpdates)
+                        .onChange(of: checksForUpdates) { _, enabled in
+                            updater.automaticallyChecksForUpdates = enabled
+                        }
+                }
+                .onAppear { checksForUpdates = updater.automaticallyChecksForUpdates }
+            }
+        }
+        .formStyle(.grouped)
+    }
+}
+
+/// Audio quality, crossfade, autoplay, and lyrics-source preferences.
 private struct PlaybackSettingsTab: View {
     @Environment(AppSettings.self) private var settings
 
@@ -44,21 +96,10 @@ private struct PlaybackSettingsTab: View {
                 Text("Play music videos as audio-only streams. Turn off to allow combined video+audio streams when they're higher quality.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-            }
-
-            Section("Network") {
-                TextField("HTTP proxy URL", text: $settings.proxyURL)
-                    .textFieldStyle(.roundedBorder)
-                Text(verbatim: "Example: http://localhost:8888. Leave blank to use the system connection. "
-                    + "Relaunch the app after changing it.")
+                Toggle("Normalize volume", isOn: $settings.volumeNormalization)
+                Text("Turn down tracks that are louder than YouTube's reference level, as YouTube does.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                    .textSelection(.disabled)
-                if !settings.proxyURL.isEmpty && NetworkProxy(string: settings.proxyURL) == nil {
-                    Text("Enter a valid http:// or https:// proxy URL.")
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                }
             }
 
             Section("Crossfade") {
@@ -78,6 +119,10 @@ private struct PlaybackSettingsTab: View {
             }
 
             Section("Next track") {
+                Toggle("Autoplay", isOn: $settings.autoplay)
+                Text("When the queue ends, keep playing a radio based on the last track.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 Toggle("Preload next track", isOn: Binding(
                     get: { settings.nextTrackPreloadSeconds > 0 },
                     set: { settings.nextTrackPreloadSeconds = $0 ? 5 : 0 }
@@ -209,6 +254,34 @@ private struct PluginsSettingsTab: View {
     }
 }
 
+/// Disk usage of the shared HTTP cache (API responses and artwork) with a
+/// button to clear it along with the in-memory artwork cache.
+private struct StorageSettingsTab: View {
+    @State private var cacheBytes = URLCache.shared.currentDiskUsage
+
+    var body: some View {
+        Form {
+            Section("Cache") {
+                LabeledContent("Cache size") {
+                    Text(Int64(cacheBytes).formatted(.byteCount(style: .file)))
+                        .monospacedDigit()
+                }
+                Button("Clear Cache") {
+                    URLCache.shared.removeAllCachedResponses()
+                    ImageCache.shared.removeAll()
+                    cacheBytes = URLCache.shared.currentDiskUsage
+                }
+                .disabled(cacheBytes == 0)
+                Text("Cached API responses and artwork. They are downloaded again as needed.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+        .onAppear { cacheBytes = URLCache.shared.currentDiskUsage }
+    }
+}
+
 /// One band's vertical gain slider with its frequency label underneath.
 private struct BandSlider: View {
     @Binding var gain: Double
@@ -250,7 +323,7 @@ private struct PluginRow: View {
 }
 
 #Preview {
-    SettingsView()
+    SettingsView(updater: nil)
         .environment(AppSettings())
         .environment(PluginHost(plugins: [DiscordPlugin(), NotificationsPlugin()]))
 }

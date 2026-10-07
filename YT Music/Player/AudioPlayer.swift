@@ -39,6 +39,10 @@ final class AudioPlayer: AudioOutput {
     /// (the end notification and the tick backstop can both observe the end).
     @ObservationIgnored private var hasSignalledEnd = false
     @ObservationIgnored private var preloadedURL: URL?
+    /// Routes stream fetches through the configured proxy; nil when there is none.
+    @ObservationIgnored private let proxiedLoader = ProxiedStreamLoader()
+    /// Loudness of the item loaded on each player, keyed by player identity.
+    @ObservationIgnored private var loudness: [ObjectIdentifier: Double] = [:]
 
     /// Live equalizer settings shared with every item's audio tap. Mutating its
     /// `settings` re-equalizes the playing track on the next audio block.
@@ -63,11 +67,24 @@ final class AudioPlayer: AudioOutput {
         didSet {
             // While a crossfade owns the per-player volumes, the fade loop picks
             // up the new gain on its next step; otherwise apply it immediately.
-            if fadeTask == nil { active.volume = clampedVolume }
+            if fadeTask == nil { active.volume = level(for: active) }
+        }
+    }
+
+    var normalizesVolume = false {
+        didSet {
+            if fadeTask == nil { active.volume = level(for: active) }
         }
     }
 
     private var clampedVolume: Float { Float(min(max(volume, 0), 1)) }
+
+    /// Master volume scaled by the normalization gain of `player`'s track.
+    private func level(for player: AVPlayer) -> Float {
+        guard normalizesVolume else { return clampedVolume }
+        let gain = VolumeNormalization.gain(loudnessDb: loudness[ObjectIdentifier(player)])
+        return clampedVolume * Float(gain)
+    }
 
     // Events handled by the owner (PlayerState); see AudioOutput.
     @ObservationIgnored var onTrackFinished: (() -> Void)?
@@ -110,9 +127,12 @@ final class AudioPlayer: AudioOutput {
     /// `knownDuration`, so AVFoundation doesn't need to read to the end of the
     /// stream before playback can begin (which otherwise stalls the start).
     private func makeItem(url: URL) -> AVPlayerItem {
-        let asset = AVURLAsset(url: url, options: [
+        let asset = AVURLAsset(url: proxiedLoader == nil ? url : ProxiedStreamLoader.loaderURL(for: url), options: [
             AVURLAssetPreferPreciseDurationAndTimingKey: false
         ])
+        if let proxiedLoader {
+            asset.resourceLoader.setDelegate(proxiedLoader, queue: proxiedLoader.queue)
+        }
         let item = AVPlayerItem(asset: asset)
         // Let AVPlayer start from the first available bytes. A large preferred
         // buffer delays time-to-first-audio on slow connections.
@@ -147,6 +167,7 @@ final class AudioPlayer: AudioOutput {
 
         let item = makeItem(url: url)
         active.replaceCurrentItem(with: item)
+        loudness[ObjectIdentifier(active)] = metadata.loudnessDb
         activate(item: item, metadata: metadata)
     }
 
@@ -156,6 +177,7 @@ final class AudioPlayer: AudioOutput {
         idle.pause()
         idle.replaceCurrentItem(with: item)
         idle.volume = 0
+        loudness[ObjectIdentifier(idle)] = metadata.loudnessDb
         preloadedURL = url
     }
 
@@ -187,6 +209,7 @@ final class AudioPlayer: AudioOutput {
         preloadedURL = nil
         incoming.volume = 0
         incoming.replaceCurrentItem(with: item)
+        loudness[ObjectIdentifier(incoming)] = metadata.loudnessDb
 
         // The incoming player becomes the source of truth before observing its
         // end, so end-of-track routes from the track now in front.
@@ -223,7 +246,7 @@ final class AudioPlayer: AudioOutput {
         }
         observeEnd(of: item)
         hasSignalledEnd = false
-        active.volume = volume ?? clampedVolume
+        active.volume = volume ?? level(for: active)
         self.metadata = metadata
         currentTime = 0
         bufferedTime = 0
@@ -255,8 +278,8 @@ final class AudioPlayer: AudioOutput {
         idle.volume = clampedVolume
     }
 
-    /// Linearly ramps `outgoing` 1→0 and `incoming` 0→1 over `seconds` (both
-    /// scaled by the master volume), then parks the outgoing player so it's ready
+    /// Linearly ramps `outgoing` 1→0 and `incoming` 0→1 over `seconds` (each
+    /// scaled by its own level), then parks the outgoing player so it's ready
     /// to be reused for the next track.
     private func runFade(outgoing: AVPlayer, incoming: AVPlayer, seconds: Double) async {
         let stepInterval = 0.05
@@ -265,15 +288,14 @@ final class AudioPlayer: AudioOutput {
             try? await Task.sleep(nanoseconds: UInt64(stepInterval * 1_000_000_000))
             if Task.isCancelled { return }
             let progress = Float(step) / Float(steps)
-            let gain = clampedVolume
-            outgoing.volume = gain * (1 - progress)
-            incoming.volume = gain * progress
+            outgoing.volume = level(for: outgoing) * (1 - progress)
+            incoming.volume = level(for: incoming) * progress
         }
         if Task.isCancelled { return }
         outgoing.pause()
         outgoing.replaceCurrentItem(with: nil)
         outgoing.volume = clampedVolume
-        incoming.volume = clampedVolume
+        incoming.volume = level(for: incoming)
     }
 
     func togglePlayPause() {

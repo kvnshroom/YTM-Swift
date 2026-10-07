@@ -34,6 +34,7 @@ nonisolated struct StubResolver: StreamResolving {
     var historyURL: URL? = nil
     var watchtimeURL: URL? = nil
     var cpn: String? = nil
+    var loudnessDb: Double? = nil
     var shouldThrow = false
     let calls = ResolverCalls()
 
@@ -41,7 +42,7 @@ nonisolated struct StubResolver: StreamResolving {
         calls.record(videoId: videoId, playlistId: playlistId)
         if shouldThrow { throw StubError.boom }
         return ResolvedStream(url: url, duration: duration, historyURL: historyURL,
-                              watchtimeURL: watchtimeURL, cpn: cpn)
+                              watchtimeURL: watchtimeURL, cpn: cpn, loudnessDb: loudnessDb)
     }
 }
 
@@ -99,6 +100,7 @@ final class FakeAudioOutput: AudioOutput {
     var duration: Double = 0
     var bufferedTime: Double = 0
     var volume: Double = 1
+    var normalizesVolume = false
     var onTrackFinished: (() -> Void)?
     var onNext: (() -> Void)?
     var onPrevious: (() -> Void)?
@@ -234,6 +236,31 @@ struct PlayerStateTests {
         await player.loadStream(videoId: "v")
 
         #expect(audio.loadedMetadata?.knownDuration == 200)
+    }
+
+    @Test("Passes the resolver's track loudness to the audio engine")
+    func passesLoudness() async {
+        let audio = FakeAudioOutput()
+        let player = PlayerState(audio: audio, resolver: StubResolver(loudnessDb: 4.5))
+        player.play(title: "S", subtitle: "A", thumbnailURL: nil, videoId: "v")
+
+        await player.loadStream(videoId: "v")
+
+        #expect(audio.loadedMetadata?.loudnessDb == 4.5)
+    }
+
+    @Test("Volume normalization follows the setting, including live changes")
+    func normalizationFollowsSetting() {
+        let suite = UserDefaults(suiteName: "test.\(UUID().uuidString)")!
+        suite.set(true, forKey: "settings.volumeNormalization")
+        let settings = AppSettings(defaults: suite)
+        let audio = FakeAudioOutput()
+        let player = PlayerState(audio: audio, resolver: StubResolver(), settings: settings)
+        #expect(audio.normalizesVolume)
+
+        settings.volumeNormalization = false
+        #expect(!audio.normalizesVolume)
+        withExtendedLifetime(player) {}
     }
 
     @Test("Failed resolve surfaces an error and loads nothing")
@@ -879,6 +906,17 @@ struct PlayerStateQueueTests {
                             radioProvider: StubRadio(tracks: tracks(["r1", "r2"])))
         p.play(tracks(["a", "b"]), startAt: 1)
         p.cycleRepeatMode()   // .off → .all
+        await p.appendRadio(seed: "b")
+        #expect(p.queue.map(\.videoId) == ["a", "b"])
+    }
+
+    @Test("Autoplay: turned off in settings, the queue is left to end")
+    func autoplayDisabled() async {
+        let s = AppSettings(defaults: UserDefaults(suiteName: "test.\(UUID().uuidString)")!)
+        s.autoplay = false
+        let p = PlayerState(audio: FakeAudioOutput(), resolver: StubResolver(),
+                            radioProvider: StubRadio(tracks: tracks(["r1", "r2"])), settings: s)
+        p.play(tracks(["a", "b"]), startAt: 1)
         await p.appendRadio(seed: "b")
         #expect(p.queue.map(\.videoId) == ["a", "b"])
     }

@@ -53,6 +53,22 @@ final class AppSettings {
         didSet { store(preferAudioOverVideo, for: .preferAudioOverVideo) }
     }
 
+    /// Turns down tracks louder than YouTube's reference level.
+    var volumeNormalization: Bool {
+        didSet {
+            store(volumeNormalization, for: .volumeNormalization)
+            onVolumeNormalizationChange?(volumeNormalization)
+        }
+    }
+
+    /// Set by PlayerState so toggling normalization applies to the playing track.
+    @ObservationIgnored var onVolumeNormalizationChange: ((Bool) -> Void)?
+
+    /// When the queue runs out, continue with a radio based on the last track.
+    var autoplay: Bool {
+        didSet { store(autoplay, for: .autoplay) }
+    }
+
     /// Optional HTTP(S) proxy used by YouTube requests and stream downloads.
     /// Leave blank to use the system network configuration.
     var proxyURL: String {
@@ -130,6 +146,13 @@ final class AppSettings {
         onEqualizerChange?(equalizerSettings)
     }
 
+    // MARK: Startup
+
+    /// Mirrors the system login item, which the user can also change in System Settings.
+    var openAtLogin: Bool {
+        didSet { LoginItem.setEnabled(openAtLogin) }
+    }
+
     // MARK: Downloader
 
     /// Where the downloader writes files. nil → the user's Downloads folder.
@@ -159,6 +182,8 @@ final class AppSettings {
         self.audioQuality = (defaults.string(forKey: Key.audioQuality.rawValue)
             .flatMap(AudioQuality.init)) ?? .auto
         self.preferAudioOverVideo = defaults.object(forKey: Key.preferAudioOverVideo.rawValue) as? Bool ?? true
+        self.volumeNormalization = defaults.bool(forKey: Key.volumeNormalization.rawValue)
+        self.autoplay = defaults.object(forKey: Key.autoplay.rawValue) as? Bool ?? true
         self.proxyURL = defaults.string(forKey: Key.proxyURL.rawValue) ?? ""
         self.lyricsProvider = (defaults.string(forKey: Key.lyricsProvider.rawValue)
             .flatMap(LyricsProvider.init)) ?? .youtubeMusic
@@ -170,6 +195,7 @@ final class AppSettings {
         self.equalizerEnabled = defaults.bool(forKey: Key.equalizerEnabled.rawValue)
         self.equalizerGains = Self.decodeGains(defaults.data(forKey: Key.equalizerGains.rawValue))
         self.downloadDirectory = Self.resolveBookmark(defaults.data(forKey: Key.downloadDirectory.rawValue))
+        self.openAtLogin = LoginItem.isEnabled
     }
 
     /// Decodes persisted band gains, falling back to a flat curve if absent or
@@ -219,6 +245,8 @@ final class AppSettings {
     private enum Key: String {
         case audioQuality        = "settings.audioQuality"
         case preferAudioOverVideo = "settings.preferAudioOverVideo"
+        case volumeNormalization = "settings.volumeNormalization"
+        case autoplay            = "settings.autoplay"
         case proxyURL            = "settings.proxyURL"
         case lyricsProvider      = "settings.lyricsProvider"
         case volume              = "settings.volume"

@@ -202,6 +202,8 @@ final class PlayerState {
             self.audio.applyEqualizer(settings.equalizerSettings)
             settings.onEqualizerChange = { [weak self] eq in self?.audio.applyEqualizer(eq) }
             self.audio.volume = settings.volume
+            self.audio.normalizesVolume = settings.volumeNormalization
+            settings.onVolumeNormalizationChange = { [weak self] in self?.audio.normalizesVolume = $0 }
         }
 
         restore()
@@ -392,11 +394,13 @@ final class PlayerState {
     /// based on it and append it so playback keeps going. No-op when more tracks
     /// already follow or the user explicitly started a radio.
     private func maybeContinueWithRadio() {
-        guard repeatMode == .off, currentIndex >= queue.count - 1,
+        guard autoplayEnabled, repeatMode == .off, currentIndex >= queue.count - 1,
               let seed = nowPlaying?.videoId else { return }
         radioTask?.cancel()
         radioTask = Task { await appendRadio(seed: seed) }
     }
+
+    private var autoplayEnabled: Bool { settings?.autoplay ?? true }
 
     /// Fetches a radio for `videoId` and appends its (new) tracks to the queue.
     /// Continues the radio already backing the queue via its token (the real
@@ -417,7 +421,7 @@ final class PlayerState {
         }
         guard let page else { return }
         // Still on the seed, still nothing queued after it, still not repeating.
-        guard nowPlaying?.videoId == videoId, repeatMode == .off,
+        guard autoplayEnabled, nowPlaying?.videoId == videoId, repeatMode == .off,
               currentIndex >= queue.count - 1 else { return }
 
         let existing = Set(queue.compactMap(\.videoId))
@@ -829,7 +833,8 @@ final class PlayerState {
                 artist: Self.cleanedArtist(nowPlaying),
                 album: nowPlaying?.album ?? "",
                 artworkURL: nowPlaying?.thumbnailURL,
-                knownDuration: resolved.duration
+                knownDuration: resolved.duration,
+                loudnessDb: resolved.loudnessDb
             )
             if usedPreloadedStream {
                 audio.loadPreloaded(url: resolved.url, metadata: metadata)
@@ -987,7 +992,8 @@ final class PlayerState {
                 artist: Self.cleanedArtist(nowPlaying),
                 album: nowPlaying?.album ?? "",
                 artworkURL: nowPlaying?.thumbnailURL,
-                knownDuration: resolved.duration
+                knownDuration: resolved.duration,
+                loudnessDb: resolved.loudnessDb
             )
             if usedPreloadedStream {
                 audio.crossfadePreloaded(url: resolved.url, metadata: metadata, duration: seconds)
@@ -1030,7 +1036,8 @@ final class PlayerState {
                         artists: track.artists, albumLink: track.albumLink)),
                     album: self.albumContext,
                     artworkURL: track.thumbnailURL,
-                    knownDuration: resolved.duration
+                    knownDuration: resolved.duration,
+                    loudnessDb: resolved.loudnessDb
                 )
                 self.preparedVideoId = videoId
                 self.preparedStream = resolved

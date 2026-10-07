@@ -13,6 +13,17 @@ struct PlayerResponse: Decodable, Sendable {
     let streamingData: StreamingData?
     let videoDetails: VideoDetails?
     let playbackTracking: PlaybackTracking?
+    let playerConfig: PlayerConfig?
+
+    nonisolated struct PlayerConfig: Decodable, Sendable {
+        let audioConfig: AudioConfig?
+
+        nonisolated struct AudioConfig: Decodable, Sendable {
+            let loudnessDb: Double?
+            let perceptualLoudnessDb: Double?
+        }
+    }
+
     var responseContext: ResponseContext? = nil
 
     /// The visitor id YouTube assigned this session. A signed-out stream's PO
@@ -64,6 +75,7 @@ struct PlayerResponse: Decodable, Sendable {
         let signatureCipher: String?
         let cipher: String?         // older key name
         let audioQuality: String?
+        let loudnessDb: Double?
         /// This stream's own length in milliseconds — more precise than
         /// `lengthSeconds`, which is rounded to whole seconds.
         var approxDurationMs: String? = nil
