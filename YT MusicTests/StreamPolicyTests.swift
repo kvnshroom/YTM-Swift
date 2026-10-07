@@ -103,17 +103,35 @@ struct StreamPolicyTests {
     ] } }
     """
 
-    @Test("Premium state follows the latest account response")
-    func premiumStateFollowsLatestResponse() throws {
+    @Test("Premium audio, once seen, holds for the session")
+    func premiumStateIsSticky() throws {
         var session = StreamSession()
         session.reset(for: "sapisid-a")
         #expect(session.premiumAudio == nil)
 
+        session.record(try playerResponse(freeJSON))
+        #expect(session.premiumAudio == false)
+
         session.record(try playerResponse(premiumJSON))
         #expect(session.premiumAudio == true)
 
-        session.record(try playerResponse(freeJSON))   // Premium ended mid-session
-        #expect(session.premiumAudio == false)
+        session.record(try playerResponse(freeJSON))   // e.g. a music video without itag 141
+        #expect(session.premiumAudio == true)
+    }
+
+    @Test("A rejected token-free stream keeps Premium audio but switches to a token")
+    func rejectionKeepsPremiumButMintsAToken() throws {
+        var session = StreamSession()
+        session.reset(for: "sapisid-a")
+        session.record(try playerResponse(premiumJSON))
+        session.tokenFreeRejected = true
+
+        #expect(session.premiumAudio == true)          // 256 kbps still listed: keep the account first
+        #expect(StreamSourcePolicy.accountTokenPlan(
+            premiumAudio: session.premiumAudio ?? false,
+            tokenFreeRejected: session.tokenFreeRejected,
+            tokenFreeWorks: session.tokenFreeWorks
+        ) == .mint)
     }
 
     @Test("A sign-in change starts the session over")

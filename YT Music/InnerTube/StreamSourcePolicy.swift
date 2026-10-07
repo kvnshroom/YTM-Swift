@@ -79,9 +79,12 @@ nonisolated enum StreamSourcePolicy {
 /// signed-in account (SAPISID) changes.
 nonisolated struct StreamSession: Sendable {
     private(set) var sapisid: String?
-    /// Whether the latest account response offered Premium audio; nil until
-    /// one was seen. Re-read on every response, so an expired or new
-    /// subscription takes effect from the next track on.
+    /// Whether the account offers Premium audio; nil until a response was
+    /// seen. Once one lists it, it holds for the session (like yt-dlp and
+    /// innertubex treat Premium as a property of the account): single tracks
+    /// without itag 141, such as some music videos, don't flip it back. A
+    /// rejected token-free stream only switches the account to tokens
+    /// (`tokenFreeRejected`); a sign-in change starts over.
     private(set) var premiumAudio: Bool?
     /// Sources to skip for a video after its stream broke off.
     var failures = StreamFailureMemory()
@@ -99,7 +102,7 @@ nonisolated struct StreamSession: Sendable {
     }
 
     mutating func record(_ response: PlayerResponse) {
-        premiumAudio = StreamSourcePolicy.offersPremiumAudio(response)
+        premiumAudio = premiumAudio == true || StreamSourcePolicy.offersPremiumAudio(response)
     }
 }
 
