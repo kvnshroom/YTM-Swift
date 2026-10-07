@@ -19,8 +19,8 @@
 //       id (so one mint per track); otherwise the account's `datasyncId` when
 //       signed in, else `visitorData`.
 //
-//  Steps 1–3 run once per integrity-token lifetime (hours) in a web view that
-//  is released when idle; step 4 is cached per binding. Reference implementations: LuanRT/BgUtils (MIT) and NewPipe's
+//  All four steps run in one short-lived web view per binding (~0.5 s, done
+//  alongside the player request); the token is cached until it expires. Reference implementations: LuanRT/BgUtils (MIT) and NewPipe's
 //  `PoTokenWebView`. Like the signature solver this is FRAGILE: if BotGuard or
 //  the jnn endpoints change, compare against those projects and yt-dlp's
 //  PO Token guide. Failures are logged and playback continues without `pot`.
@@ -113,29 +113,22 @@ nonisolated enum PoTokenCodec {
     }
 }
 
-/// Mints GVS PO tokens with BotGuard in a hidden WKWebView. The web view is
-/// built on first use, kept while tracks keep asking for tokens, and released
-/// after `idleTimeout` so a paused app doesn't hold a WebKit process. Main-actor
-/// bound because WebKit is.
+/// Mints GVS PO tokens with BotGuard in a hidden WKWebView. Each mint uses a
+/// fresh web view that is dropped right after: a BotGuard VM left idle in a
+/// hidden page mints later tokens googlevideo rejects, and this way no WebKit
+/// process lingers between tracks. Main-actor bound because WebKit is.
 @MainActor
 final class PoTokenProvider {
     static let shared = PoTokenProvider()
 
-    /// A ready minter: BotGuard's output and the integrity token live in the
-    /// web view's page; both stay valid until `expiry`.
-    private struct Minter {
-        let webView: WKWebView
+    private struct MintedToken {
+        let value: String
         let expiry: Date
     }
 
-    private var minter: Minter?
-    private var minterTask: Task<Minter, Error>?
-    private var idleRelease: Task<Void, Never>?
-    private var tokens: [String: String] = [:]
+    private var tokens: [String: MintedToken] = [:]
+    private var pending: [String: Task<MintedToken, Error>] = [:]
     private let session = NetworkSession.make()
-
-    /// How long an unused minter is kept before its web view is released.
-    private static let idleTimeout: Duration = .seconds(90)
 
     // Public constants of the web player's BotGuard integration (as used by
     // BgUtils/NewPipe): the jnn API key and the "request key" of the program.
@@ -148,64 +141,28 @@ final class PoTokenProvider {
         + "(KHTML, like Gecko) Version/26.0 Safari/605.1.15"
 
     /// The `pot` value for a content binding (video id, `datasyncId` or
-    /// `visitorData`; see `StreamResolver`).
+    /// `visitorData`; see `StreamResolver`). Cached until it expires;
+    /// concurrent requests for the same binding share one mint.
     func token(for binding: String) async throws -> String {
-        let minter = try await readyMinter()
-        defer { scheduleIdleRelease() }
-        if let cached = tokens[binding] { return cached }
+        if let cached = tokens[binding], cached.expiry > Date() { return cached.value }
+        if let task = pending[binding] { return try await task.value.value }
 
-        let result = try await minter.webView.callAsyncJavaScript(
-            Self.mintScript,
-            arguments: ["binding": binding],
-            contentWorld: .page
-        )
-        guard let numbers = result as? [NSNumber], !numbers.isEmpty else {
-            throw PoTokenError.botGuard("minter returned no bytes")
-        }
-        let token = PoTokenCodec.potString(numbers.map(\.uint8Value))
-        if tokens.count > 64 { tokens.removeAll() } // per-video bindings pile up
-        tokens[binding] = token
-        return token
+        let task = Task { try await self.mint(for: binding) }
+        pending[binding] = task
+        defer { pending[binding] = nil }
+
+        let minted = try await task.value
+        tokens = tokens.filter { $0.value.expiry > Date() } // per-video bindings pile up
+        tokens[binding] = minted
+        return minted.value
     }
 
-    // MARK: - Minter lifecycle
+    // MARK: - Minting
 
-    /// Returns a valid minter, building one if there is none or it expired.
-    /// Concurrent callers share one setup.
-    private func readyMinter() async throws -> Minter {
-        idleRelease?.cancel()
-        if let minter, minter.expiry > Date() { return minter }
-        if let minterTask { return try await minterTask.value }
-
-        release()
-        let task = Task { try await self.makeMinter() }
-        minterTask = task
-        defer { minterTask = nil }
-
-        let made = try await task.value
-        minter = made
-        return made
-    }
-
-    private func scheduleIdleRelease() {
-        idleRelease?.cancel()
-        idleRelease = Task { [weak self] in
-            try? await Task.sleep(for: Self.idleTimeout)
-            guard !Task.isCancelled else { return }
-            self?.release()
-        }
-    }
-
-    /// Drops the web view (WebKit then ends its process) and cached tokens.
-    private func release() {
-        minter?.webView.stopLoading()
-        minter = nil
-        tokens.removeAll()
-    }
-
-    private func makeMinter() async throws -> Minter {
+    private func mint(for binding: String) async throws -> MintedToken {
         let started = Date()
         let webView = try await loadBlankPlayerPage()
+        defer { webView.stopLoading() } // dropped on return; WebKit then ends its process
 
         let createData = try await postBotGuardService("Create", body: [Self.requestKey])
         let challenge = try PoTokenCodec.challenge(fromCreateResponse: createData)
@@ -225,19 +182,23 @@ final class PoTokenProvider {
 
         let itData = try await postBotGuardService("GenerateIT", body: [Self.requestKey, botGuardResponse])
         let integrity = try PoTokenCodec.integrityToken(fromGenerateITResponse: itData)
-        _ = try await webView.callAsyncJavaScript(
-            "window.__ytIntegrityToken = new Uint8Array(bytes);",
-            arguments: ["bytes": integrity.token.map(Int.init)],
+
+        let result = try await webView.callAsyncJavaScript(
+            Self.mintScript,
+            arguments: ["integrityToken": integrity.token.map(Int.init), "binding": binding],
             contentWorld: .page
         )
+        guard let numbers = result as? [NSNumber], !numbers.isEmpty else {
+            throw PoTokenError.botGuard("minter returned no bytes")
+        }
 
         // Renew ten minutes early so a token never expires mid-track.
         let lifetime = max(integrity.lifetime - 600, 60)
-        PlaybackLog.note(String(
-            format: "potoken: BotGuard ready in %.1fs · valid %.0f min",
-            Date().timeIntervalSince(started), lifetime / 60
-        ))
-        return Minter(webView: webView, expiry: Date().addingTimeInterval(lifetime))
+        PlaybackLog.note(String(format: "potoken: minted in %.1fs", Date().timeIntervalSince(started)))
+        return MintedToken(
+            value: PoTokenCodec.potString(numbers.map(\.uint8Value)),
+            expiry: Date().addingTimeInterval(lifetime)
+        )
     }
 
     /// A hidden web view on an empty page with a youtube.com origin, which is
@@ -305,11 +266,12 @@ final class PoTokenProvider {
     return response;
     """
 
-    /// Mints the token for `binding` and returns its bytes as plain numbers.
+    /// Mints the token for `binding` from the integrity token and returns its
+    /// bytes as plain numbers.
     private static let mintScript = """
     const getMinter = window.__ytWebPoSignalOutput && window.__ytWebPoSignalOutput[0];
     if (!getMinter) throw new Error("BotGuard minter missing");
-    const mint = await getMinter(window.__ytIntegrityToken);
+    const mint = await getMinter(new Uint8Array(integrityToken));
     if (typeof mint !== "function") throw new Error("BotGuard minter is not a function");
     const token = await mint(new TextEncoder().encode(binding));
     if (!(token instanceof Uint8Array)) throw new Error("minted token is not bytes");
