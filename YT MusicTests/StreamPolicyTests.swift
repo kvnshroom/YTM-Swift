@@ -162,8 +162,9 @@ struct StreamPolicyTests {
         #expect(StreamSourcePolicy.classify(stream(source: .visionOS, age: 3700, now: now), at: now) == .expired)
         #expect(StreamSourcePolicy.classify(stream(source: .visionOS, age: 60, now: now), at: now)
             == .sourceFailed(.visionOS))
-        #expect(StreamSourcePolicy.classify(stream(source: .account, age: 60, now: now), at: now)
-            == .sourceFailed(.account))
+        var mintedAccount = stream(source: .account, age: 60, now: now)
+        mintedAccount.usedToken = true
+        #expect(StreamSourcePolicy.classify(mintedAccount, at: now) == .sourceFailed(.account))
 
         var unknown = stream(source: .visionOS, age: 60, now: now)
         unknown.source = nil
@@ -182,5 +183,26 @@ struct StreamPolicyTests {
 
         memory.record(.account, videoId: "a", at: now.addingTimeInterval(30))
         #expect(memory.excluded(for: "a", at: now.addingTimeInterval(60)) == [.visionOS, .account])
+    }
+
+    @Test("Only Premium accounts try without a token, and only until it was rejected")
+    func accountTokenPlan() {
+        #expect(StreamSourcePolicy.accountTokenPlan(premiumAudio: false, tokenFreeRejected: false, tokenFreeWorks: nil) == .mint)
+        #expect(StreamSourcePolicy.accountTokenPlan(premiumAudio: true, tokenFreeRejected: false, tokenFreeWorks: nil) == .probeThenDecide)
+        #expect(StreamSourcePolicy.accountTokenPlan(premiumAudio: true, tokenFreeRejected: false, tokenFreeWorks: true) == .tokenFree)
+        #expect(StreamSourcePolicy.accountTokenPlan(premiumAudio: true, tokenFreeRejected: false, tokenFreeWorks: false) == .mint)
+        #expect(StreamSourcePolicy.accountTokenPlan(premiumAudio: true, tokenFreeRejected: true, tokenFreeWorks: true) == .mint)
+    }
+
+    @Test("A token-free account stream that broke off means the account needs a token")
+    func tokenFreeFailureIsClassified() {
+        let now = Date()
+        var tokenFree = stream(source: .account, age: 60, now: now)
+        tokenFree.usedToken = false
+        #expect(StreamSourcePolicy.classify(tokenFree, at: now) == .tokenFreeRejected)
+
+        var minted = stream(source: .account, age: 60, now: now)
+        minted.usedToken = true
+        #expect(StreamSourcePolicy.classify(minted, at: now) == .sourceFailed(.account))
     }
 }

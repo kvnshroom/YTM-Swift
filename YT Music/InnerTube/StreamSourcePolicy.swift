@@ -70,6 +70,11 @@ nonisolated struct StreamSession: Sendable {
     private(set) var premiumAudio: Bool?
     /// Sources to skip for a video after its stream broke off.
     var failures = StreamFailureMemory()
+    /// A token-free account stream was rejected this session.
+    var tokenFreeRejected = false
+    /// Result of the one-off probe whether token-free account streams play in
+    /// full; nil until probed (or after an inconclusive probe).
+    var tokenFreeWorks: Bool?
 
     /// Starts over when the signed-in account changed.
     mutating func reset(for sapisid: String?) {
@@ -89,6 +94,9 @@ nonisolated enum StreamFailure: Equatable, Sendable {
     case expired
     /// The source served a stream that broke off.
     case sourceFailed(StreamSource)
+    /// A token-free account stream broke off: the Premium exemption no longer
+    /// applies, so the account needs a token for the rest of the session.
+    case tokenFreeRejected
 }
 
 extension StreamSourcePolicy {
@@ -99,7 +107,29 @@ extension StreamSourcePolicy {
     static func classify(_ stream: ResolvedStream, at now: Date) -> StreamFailure? {
         guard let source = stream.source else { return nil }
         if now.timeIntervalSince(stream.resolvedAt) > expiryAge { return .expired }
+        if source == .account && !stream.usedToken { return .tokenFreeRejected }
         return .sourceFailed(source)
+    }
+}
+
+/// How the account source gets a stream that plays in full.
+nonisolated enum AccountTokenPlan: Equatable, Sendable {
+    /// Premium, and known to work without a token.
+    case tokenFree
+    /// Premium, not probed yet: probe once, then go token-free or mint.
+    case probeThenDecide
+    /// Mint a PO token in a web view.
+    case mint
+}
+
+extension StreamSourcePolicy {
+    static func accountTokenPlan(premiumAudio: Bool, tokenFreeRejected: Bool, tokenFreeWorks: Bool?) -> AccountTokenPlan {
+        guard premiumAudio, !tokenFreeRejected else { return .mint }
+        switch tokenFreeWorks {
+        case true?:  return .tokenFree
+        case false?: return .mint
+        case nil:    return .probeThenDecide
+        }
     }
 }
 

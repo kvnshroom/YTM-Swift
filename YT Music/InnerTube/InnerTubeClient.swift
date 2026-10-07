@@ -547,6 +547,22 @@ nonisolated final class InnerTubeClient: Sendable, WatchHistoryReporting {
         return try await post("player", body: body)
     }
 
+    /// Whether googlevideo serves `url` past its first ~1 MB, the point where a
+    /// stream without a valid PO token gets cut off with 403. nil when that
+    /// can't be told (e.g. the track is shorter, or the request failed).
+    func streamPlaysPastFirstMegabyte(_ url: URL) async -> Bool? {
+        var request = URLRequest(url: url)
+        request.setValue("bytes=1500000-1500001", forHTTPHeaderField: "Range")
+        request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
+        guard let (_, response) = try? await session.data(for: request),
+              let status = (response as? HTTPURLResponse)?.statusCode else { return nil }
+        switch status {
+        case 206: return true
+        case 403: return false
+        default:  return nil
+        }
+    }
+
     /// Loads playback streams for a video as the visionOS YouTube app, which
     /// currently serves complete streams with plain URLs: no signature or `n`
     /// solving and no PO token (see `StreamResolver`). Always anonymous. Without

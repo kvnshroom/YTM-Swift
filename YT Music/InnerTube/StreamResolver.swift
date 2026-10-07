@@ -143,6 +143,9 @@ actor StreamResolver: StreamResolving {
         case .sourceFailed(let source):
             session.failures.record(source, videoId: videoId, at: Date())
             PlaybackLog.problem("stream source \(source.rawValue) broke off for \(videoId); skipping it for 10 min")
+        case .tokenFreeRejected:
+            session.tokenFreeRejected = true
+            PlaybackLog.problem("token-free account stream rejected; using a token for this session")
         }
     }
 
@@ -220,11 +223,64 @@ actor StreamResolver: StreamResolving {
         PlaybackLog.note("selected itag=\(format.itag ?? -1) mime=\(format.mimeType ?? "?") quality=\(preferences.audioQuality.rawValue)")
 
         let deciphered = try await decipher.streamURL(for: format)
-        var stream = resolved(url: deciphered, format: format, response: response,
-                              videoId: videoId, source: .account, usedToken: false)
+        let token = try await accountToken(videoId: videoId, response: response, url: deciphered)
+        var stream = resolved(url: Self.appendingPoToken(token, to: deciphered), format: format, response: response,
+                              videoId: videoId, source: .account, usedToken: token != nil)
         stream.historyURL = response.playbackTracking?.playbackURL
         stream.watchtimeURL = response.playbackTracking?.watchtimeURL
         return stream
+    }
+
+    /// The PO token the account stream needs, or nil when it plays in full
+    /// without one (Premium, verified once per session by a probe).
+    private func accountToken(videoId: String, response: PlayerResponse, url: URL) async throws -> String? {
+        let plan = StreamSourcePolicy.accountTokenPlan(
+            premiumAudio: session.premiumAudio ?? false,
+            tokenFreeRejected: session.tokenFreeRejected,
+            tokenFreeWorks: session.tokenFreeWorks
+        )
+        switch plan {
+        case .tokenFree:
+            return nil
+        case .probeThenDecide:
+            if let works = await client.streamPlaysPastFirstMegabyte(url) {
+                session.tokenFreeWorks = works
+                PlaybackLog.note("potoken: Premium streams \(works ? "play" : "don't play") without a token")
+                if works { return nil }
+            }
+        case .mint:
+            break
+        }
+        let config = await currentPageConfig()
+        let binding: String? = config.bindsToVideoId
+            ? videoId
+            : config.dataSyncId ?? response.responseContext?.visitorData
+        guard let binding else {
+            throw StreamError.notPlayable("no session to bind a stream token to")
+        }
+        return try await PoTokenProvider.shared.token(for: binding)
+    }
+
+    /// The page config deciding PO token bindings, keyed by the SAPISID it was
+    /// read with (nil = signed out) so a sign-in change re-reads it.
+    private var pageConfig: (sapisid: String?, config: PlayerPageConfig)?
+
+    /// The YT Music page config, read once per sign-in state. A failed read
+    /// falls back to binding by video id, the binding YouTube currently uses.
+    private func currentPageConfig() async -> PlayerPageConfig {
+        let sapisid = await CredentialStore.shared.credentials?.sapisid
+        if let pageConfig, pageConfig.sapisid == sapisid { return pageConfig.config }
+
+        let config: PlayerPageConfig
+        do {
+            config = try await client.playerPageConfig()
+            PlaybackLog.note("potoken: bind to \(config.bindsToVideoId ? "video id" : config.dataSyncId != nil ? "account" : "visitor")")
+            pageConfig = (sapisid, config)
+        } catch {
+            PlaybackLog.problem("potoken: page config unavailable (\(error.localizedDescription))")
+            config = PlayerPageConfig(dataSyncId: nil, bindsToVideoId: true)
+        }
+        return config
     }
 
     /// Tags `url` with a fresh content-playback nonce and packs the result
