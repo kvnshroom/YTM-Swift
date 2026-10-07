@@ -45,7 +45,7 @@ VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP/C
 BUILD=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$APP/Contents/Info.plist")
 MIN_OS=$(/usr/libexec/PlistBuddy -c "Print :LSMinimumSystemVersion" "$APP/Contents/Info.plist")
 TAG="v$VERSION-kvn"
-ZIP_NAME="YouTube Music $VERSION.zip"
+ZIP_NAME="YouTube-Music-$VERSION.zip" # no spaces: GitHub renames them in asset names
 ZIP="$WORK/$ZIP_NAME"
 ditto -c -k --sequesterRsrc --keepParent "$APP" "$ZIP"
 
@@ -53,7 +53,7 @@ SIGN_UPDATE=$(find "$WORK/dd/SourcePackages/artifacts" -path "*/bin/sign_update"
 SIGNATURE=$("$SIGN_UPDATE" --ed-key-file "$KEY" -p "$ZIP")
 "$SIGN_UPDATE" --verify --ed-key-file "$KEY" "$ZIP" "$SIGNATURE" >/dev/null
 LENGTH=$(stat -f%z "$ZIP")
-ZIP_URL="https://github.com/$REPO/releases/download/$TAG/${ZIP_NAME// /%20}"
+ZIP_URL="https://github.com/$REPO/releases/download/$TAG/$ZIP_NAME"
 
 cat >"$WORK/appcast.xml" <<XML
 <?xml version="1.0" standalone="yes"?>
