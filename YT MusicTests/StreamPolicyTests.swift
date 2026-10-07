@@ -91,4 +91,60 @@ struct StreamPolicyTests {
         #expect(StreamSourcePolicy.directURL(of: formats[0])?.host == "rr1.googlevideo.com")
         #expect(StreamSourcePolicy.directURL(of: formats[1]) == nil)
     }
+
+    private let premiumJSON = """
+    { "streamingData": { "adaptiveFormats": [
+        { "itag": 141, "mimeType": "audio/mp4; codecs=\\"mp4a.40.2\\"", "bitrate": 260000 }
+    ] } }
+    """
+    private let freeJSON = """
+    { "streamingData": { "adaptiveFormats": [
+        { "itag": 140, "mimeType": "audio/mp4; codecs=\\"mp4a.40.2\\"", "bitrate": 130000 }
+    ] } }
+    """
+
+    @Test("Premium state follows the latest account response")
+    func premiumStateFollowsLatestResponse() throws {
+        var session = StreamSession()
+        session.reset(for: "sapisid-a")
+        #expect(session.premiumAudio == nil)
+
+        session.record(try playerResponse(premiumJSON))
+        #expect(session.premiumAudio == true)
+
+        session.record(try playerResponse(freeJSON))   // Premium ended mid-session
+        #expect(session.premiumAudio == false)
+    }
+
+    @Test("A sign-in change starts the session over")
+    func signInChangeResetsSession() throws {
+        var session = StreamSession()
+        session.reset(for: "sapisid-a")
+        session.record(try playerResponse(premiumJSON))
+
+        session.reset(for: "sapisid-a")                  // same account: kept
+        #expect(session.premiumAudio == true)
+
+        session.reset(for: "sapisid-b")                  // other account: unknown again
+        #expect(session.premiumAudio == nil)
+        #expect(session.sapisid == "sapisid-b")
+    }
+
+    @Test("The first-track deadline returns a fast result and gives up on a slow one")
+    func firstTrackDeadline() async {
+        let fast = Task<Int, Error> { 7 }
+        #expect(await awaitValue(of: fast, within: 0.5) == 7)
+
+        let slow = Task<Int, Error> {
+            try await Task.sleep(for: .seconds(5))
+            return 8
+        }
+        let started = ContinuousClock.now
+        #expect(await awaitValue(of: slow, within: 0.05) == nil)
+        #expect(ContinuousClock.now - started < .seconds(1))
+        slow.cancel()
+
+        let failing = Task<Int, Error> { throw URLError(.notConnectedToInternet) }
+        #expect(await awaitValue(of: failing, within: 0.5) == nil)
+    }
 }

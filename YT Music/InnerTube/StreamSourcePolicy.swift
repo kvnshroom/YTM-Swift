@@ -58,3 +58,58 @@ nonisolated enum StreamSourcePolicy {
         return format.url.flatMap { URL(string: $0) }
     }
 }
+
+/// What the resolver knows about the signed-in account during this app
+/// session. Nothing is persisted: it starts over on relaunch and when the
+/// signed-in account (SAPISID) changes.
+nonisolated struct StreamSession: Sendable {
+    private(set) var sapisid: String?
+    /// Whether the latest account response offered Premium audio; nil until
+    /// one was seen. Re-read on every response, so an expired or new
+    /// subscription takes effect from the next track on.
+    private(set) var premiumAudio: Bool?
+
+    /// Starts over when the signed-in account changed.
+    mutating func reset(for sapisid: String?) {
+        guard sapisid != self.sapisid else { return }
+        self = StreamSession()
+        self.sapisid = sapisid
+    }
+
+    mutating func record(_ response: PlayerResponse) {
+        premiumAudio = StreamSourcePolicy.offersPremiumAudio(response)
+    }
+}
+
+/// The task's value if it succeeds within `seconds`, else nil. The task keeps
+/// running either way, so its result can still be used later. (A task group
+/// can't do this: it waits for every child, including one stuck on `task`.)
+nonisolated func awaitValue<T: Sendable>(of task: Task<T, Error>, within seconds: Double) async -> T? {
+    let race = FirstResult<T?>()
+    return await withCheckedContinuation { continuation in
+        race.start(continuation)
+        Task { race.finish(try? await task.value) }
+        Task {
+            try? await Task.sleep(for: .seconds(seconds))
+            race.finish(nil)
+        }
+    }
+}
+
+/// Resumes a continuation with whichever result arrives first.
+private nonisolated final class FirstResult<Value: Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Value, Never>?
+
+    func start(_ continuation: CheckedContinuation<Value, Never>) {
+        lock.withLock { self.continuation = continuation }
+    }
+
+    func finish(_ value: Value) {
+        let waiting = lock.withLock { () -> CheckedContinuation<Value, Never>? in
+            defer { continuation = nil }
+            return continuation
+        }
+        waiting?.resume(returning: value)
+    }
+}
